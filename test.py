@@ -177,7 +177,6 @@ def main():
     embedding_size = 10
 
     datawrapper = DataWrapper(vasp_charge, batch_size)
-    breakpoint()
 
     model = msgnet.MsgpassingNetwork(
         embedding_shape=(len(ase.data.chemical_symbols), embedding_size),
