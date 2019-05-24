@@ -94,7 +94,6 @@ class VaspChargeDataLoader(msgnet.dataloader.DataLoader):
         pass
 
     def _preprocess(self):
-        graph_obj_list = []
         num_pos = np.prod(self.grid_pos.shape[0:3])
         for i in range(num_pos):
             if i % 100 == 0:
@@ -106,6 +105,5 @@ class VaspChargeDataLoader(msgnet.dataloader.DataLoader):
             probe_atom = ase.atom.Atom(0, probe_pos)
             atom_copy.append(probe_atom)
             graphobj = FeatureGraphVirtual(atom_copy, "const", self.cutoff_radius, lambda x: x, density=target_density)
-            graph_obj_list.append(graphobj)
+            yield graphobj
         print("")
-        return graph_obj_list
