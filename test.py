@@ -7,6 +7,7 @@ import ase.io
 import msgnet
 import tensorflow as tf
 import numpy as np
+import densitymsg
 from densityloader import VaspChargeDataLoader
 from ase.neighborlist import NeighborList
 
@@ -29,9 +30,9 @@ class ReadoutLastnode(msgnet.readout.ReadoutFunction):
         return graph_out
 
 def get_model():
-    embedding_size = 10
+    embedding_size = 64
 
-    model = msgnet.MsgpassingNetwork(
+    model = densitymsg.DensityMsgPassing(
         embedding_shape=(len(ase.data.chemical_symbols), embedding_size),
         edge_feature_expand=[(0, 0.01, CUTOFF_ANGSTROM+1)],
         use_edge_updates=False,
@@ -53,7 +54,7 @@ def main():
 
     num_steps = int(1e6)
     start_step = 0
-    log_interval = 200
+    log_interval = 1000
     val_obj = None
     train_obj = data_handler
 
