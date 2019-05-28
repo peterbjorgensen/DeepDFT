@@ -18,8 +18,8 @@ class ReadoutLastnode(msgnet.readout.ReadoutFunction):
 
     def __call__(self, nodes, segments):
         nodes_size = int(nodes.get_shape()[1])
-        set_len = tf.segment_sum(tf.ones_like(segments), segments, name="set_len") - 1
-        last_node_idx = tf.cumsum(set_len)
+        set_len = tf.segment_sum(tf.ones_like(segments), segments, name="set_len")
+        last_node_idx = tf.cumsum(set_len) - 1
         last_nodes = tf.gather(nodes, last_node_idx)
         graph_out = msgnet.defaults.mlp(
             last_nodes,
