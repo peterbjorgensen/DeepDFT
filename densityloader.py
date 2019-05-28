@@ -71,12 +71,13 @@ class FeatureGraphVirtual(FeatureGraph):
         )
 
 class VaspChargeDataLoader(msgnet.dataloader.DataLoader):
-    def __init__(self, vasp_fname, cutoff_radius):
+    def __init__(self, vasp_fname, cutoff_radius, subsample_factor=1):
         super().__init__()
         vasp_charge = VaspChargeDensity(filename=vasp_fname)
         self.download_dest = vasp_fname
         self.vasp_charge = vasp_charge
-        self.density = vasp_charge.chg[-1] #seperate density
+        self.subsample_factor = subsample_factor
+        self.density = vasp_charge.chg[-1][::subsample_factor, ::subsample_factor, ::subsample_factor] #seperate density
         self.atoms = vasp_charge.atoms[-1] #seperate atom positions
         ngridpts = np.array(self.density.shape) #grid matrix
         self.cutoff_radius = cutoff_radius
@@ -89,6 +90,17 @@ class VaspChargeDataLoader(msgnet.dataloader.DataLoader):
         )
         grid_pos = np.stack(grid_pos, 3)
         self.grid_pos = np.dot(grid_pos, self.atoms.get_cell())
+
+    @property
+    def final_dest(self):
+        cutname = "%s-%.2f" % (self.cutoff_type, self.cutoff_radius)
+        if self.subsample_factor > 1:
+            cutname += "-ss%d" % self.subsample_factor
+        return "/%s/%s_%s.pkz" % (
+            msgnet.defaults.datadir,
+            self.__class__.__name__,
+            cutname,
+        )
 
     def _download_data(self):
         pass

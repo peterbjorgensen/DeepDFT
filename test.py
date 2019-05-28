@@ -1,132 +1,16 @@
+import sys
 import os
 import timeit
 import logging
-import warnings
-import numpy as np
 import ase
 import ase.io
 import msgnet
-import multiprocessing
-import queue
 import tensorflow as tf
+import numpy as np
 from densityloader import VaspChargeDataLoader
 from ase.neighborlist import NeighborList
 
 CUTOFF_ANGSTROM = 5.0
-
-
-def data_worker(density, atoms, grid_pos, batch_size, queue):
-    QUEUE_TTL = 100
-    i = 0
-    seeds = [20,30,40]
-    while True:
-        graph_obj_list = []
-        num_pos = np.prod(grid_pos.shape[0:3])
-        np.random.seed(seeds[i])
-        i=(i+1)%3
-        selection = np.random.randint(0, num_pos, batch_size)
-        selection = np.unravel_index(selection, grid_pos.shape[0:3])
-        for grid_index in np.stack(selection,-1):
-            probe_pos = grid_pos[tuple(grid_index)]
-            target_density = density[tuple(grid_index)]
-            atom_copy = atoms.copy()
-            probe_atom = ase.atom.Atom(0, probe_pos)
-            atom_copy.append(probe_atom)
-            graphobj = FeatureGraphVirtual(atom_copy, "const", CUTOFF_ANGSTROM, lambda x: x, density=target_density)
-            graph_obj_list.append(graphobj)
-        handler = msgnet.datahandler.EdgeSelectDataHandler(graph_obj_list, ["density"], [0])
-        batch = next(handler.get_test_batches(batch_size))
-        queue.put((batch,QUEUE_TTL))
-
-class DataWrapper:
-    QUEUE_SIZE = 100
-    def __init__(self, vasp_charge, batch_size):
-        self.vasp_charge = vasp_charge
-        self.batch_size = batch_size
-        self.density = vasp_charge.chg[-1] #seperate density
-        self.atoms = vasp_charge.atoms[-1] #seperate atom positions
-        ngridpts = np.array(self.density.shape) #grid matrix
-
-        grid_pos = np.meshgrid(
-            np.arange(ngridpts[0])/self.density.shape[0],
-            np.arange(ngridpts[1])/self.density.shape[1],
-            np.arange(ngridpts[2])/self.density.shape[2],
-            indexing='ij',
-        )
-        grid_pos = np.stack(grid_pos, 3)
-        self.grid_pos = np.dot(grid_pos, self.atoms.get_cell())
-
-        self.train_queue = multiprocessing.Queue(self.QUEUE_SIZE)
-        self.data_worker = multiprocessing.Process(target=data_worker, args=(self.density, self.atoms, self.grid_pos, self.batch_size, self.train_queue))
-        self.data_worker.daemon = True
-        self.data_worker.start()
-        print(self.data_worker, self.data_worker.is_alive())
-
-    def get_train_batch(self, batch_size):
-        assert batch_size==self.batch_size, "Wrapper does not support flexible batch sizes"
-        batch, ttl = self.train_queue.get()
-        if ttl > 0:
-            try:
-                self.train_queue.put_nowait((batch, ttl-1))
-            except queue.Full:
-                pass
-        return batch
-        #graph_obj_list = []
-        #num_pos = np.prod(self.grid_pos.shape[0:3])
-        #selection = np.random.randint(0, num_pos, batch_size)
-        #selection = np.unravel_index(selection, self.grid_pos.shape[0:3])
-        #for grid_index in np.stack(selection,-1):
-        #    probe_pos = self.grid_pos[tuple(grid_index)]
-        #    target_density = self.density[tuple(grid_index)]
-        #    atom_copy = self.atoms.copy()
-        #    probe_atom = ase.atom.Atom(0, probe_pos)
-        #    atom_copy.append(probe_atom)
-        #    graphobj = FeatureGraphVirtual(atom_copy, "const", CUTOFF_ANGSTROM, lambda x: x, density=target_density)
-        #    graph_obj_list.append(graphobj)
-        #handler = msgnet.datahandler.EdgeSelectDataHandler(graph_obj_list, ["density"], [0])
-        #return next(handler.get_test_batches(batch_size))
-
-    def get_test_batches(self, batch_size):
-        return [self.get_train_batch(batch_size)]
-
-    def __len__(self):
-        #return np.prod(self.density.shape)
-        return 200
-
-class TestDataWrapper:
-    def __init__(self, vasp_charge, subsample_factor):
-        self.vasp_charge = vasp_charge
-        self.density = vasp_charge.chg[-1][::subsample_factor, ::subsample_factor, ::subsample_factor]
-        self.atoms = vasp_charge.atoms[-1]
-        ngridpts = self.density.shape
-
-        grid_pos = np.meshgrid(
-            np.arange(ngridpts[0])/self.density.shape[0],
-            np.arange(ngridpts[1])/self.density.shape[1],
-            np.arange(ngridpts[2])/self.density.shape[2],
-            indexing='ij',
-        )
-        grid_pos = np.stack(grid_pos, 3)
-        self.grid_pos = np.dot(grid_pos, self.atoms.get_cell())
-
-    def get_test_batches(self, batch_size):
-        graph_obj_list = []
-        num_pos = np.prod(self.grid_pos.shape[0:3])
-        for i in np.stack(selection,-1):
-            probe_pos = self.grid_pos[tuple(grid_index)]
-            target_density = self.density[tuple(grid_index)]
-            atom_copy = self.atoms.copy()
-            probe_atom = ase.atom.Atom(0, probe_pos)
-            atom_copy.append(probe_atom)
-            graphobj = FeatureGraphVirtual(atom_copy, "const", CUTOFF_ANGSTROM, lambda x: x, density=target_density)
-            graph_obj_list.append(graphobj)
-        handler = msgnet.datahandler.EdgeSelectDataHandler(graph_obj_list, ["density"], [0])
-        return handler.get_test_batches(batch_size)
-
-    def __len__(self):
-        return np.prod(self.density.shape)
-
-
 
 class ReadoutLastnode(msgnet.readout.ReadoutFunction):
     is_sum = False
@@ -144,29 +28,34 @@ class ReadoutLastnode(msgnet.readout.ReadoutFunction):
         )
         return graph_out
 
-def main():
-    densityloader = VaspChargeDataLoader("si30/CHGCAR", CUTOFF_ANGSTROM)
-    graph_obj_list = densityloader.load()
-
-
-    batch_size = 20
+def get_model():
     embedding_size = 10
-
-    datawrapper = DataWrapper(vasp_charge, batch_size)
 
     model = msgnet.MsgpassingNetwork(
         embedding_shape=(len(ase.data.chemical_symbols), embedding_size),
-        edge_feature_expand=[(0, 0.1, CUTOFF_ANGSTROM+1)],
+        edge_feature_expand=[(0, 0.01, CUTOFF_ANGSTROM+1)],
         use_edge_updates=False,
         readout_fn=ReadoutLastnode())
 
-    trainer = msgnet.train.GraphOutputTrainer(model, datawrapper, batch_size=batch_size)
+    return model
+
+def main():
+    densityloader = VaspChargeDataLoader("si30/CHGCAR", CUTOFF_ANGSTROM, 5)
+    graph_obj_list = densityloader.load()[0:20]
+
+    data_handler = msgnet.datahandler.EdgeSelectDataHandler(graph_obj_list, ["density"], [0])
+
+    batch_size = 20
+
+    model = get_model()
+
+    trainer = msgnet.train.GraphOutputTrainer(model, data_handler, batch_size=batch_size)
 
     num_steps = int(1e6)
     start_step = 0
     log_interval = 200
     val_obj = None
-    train_obj = datawrapper
+    train_obj = data_handler
 
     start_time = timeit.default_timer()
 
@@ -239,6 +128,44 @@ def main():
                 else:
                     model.save(sess, logs_path + "model.ckpt", global_step=update_step)
 
+def plot_prediction(model_file):
+    from mayavi import mlab
+    model = get_model()
+    densityloader = VaspChargeDataLoader("si30/CHGCAR", CUTOFF_ANGSTROM, 5)
+    graph_obj_list = densityloader.load()
+
+    data_handler = msgnet.datahandler.EdgeSelectDataHandler(graph_obj_list, ["density"], [0])
+
+    with tf.Session() as sess:
+        sess.run(tf.global_variables_initializer())
+
+        model.load(sess, model_file)
+
+        density = []
+        target_density = []
+        for input_data in data_handler.get_test_batches(10):
+            feed_dict = {}
+            for key, val in model.get_input_symbols().items():
+                feed_dict[val] = input_data[key]
+            test_pred, = sess.run([model.get_graph_out()], feed_dict=feed_dict)
+            density.append(test_pred)
+            target_density.append(input_data["graph_targets"])
+
+        pred_density = np.concatenate(density)
+        target_density = np.concatenate(target_density)
+
+    pred_density = pred_density.reshape(densityloader.grid_pos.shape[0:3])
+    target_density = target_density.reshape(densityloader.grid_pos.shape[0:3])
+
+    x = densityloader.grid_pos[:,:,:,0]
+    y = densityloader.grid_pos[:,:,:,1]
+    z = densityloader.grid_pos[:,:,:,2]
+
+    mlab.contour3d(x,y,z,pred_density)
+    mlab.contour3d(x,y,z,target_density)
+
+    mlab.show()
+
 
 if __name__ == "__main__":
     logs_path = "logs/"
@@ -251,4 +178,7 @@ if __name__ == "__main__":
             logging.StreamHandler(),
         ],
     )
-    main()
+    if len(sys.argv) > 1:
+        plot_prediction(sys.argv[1])
+    else:
+        main()
