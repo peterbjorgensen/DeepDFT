@@ -24,7 +24,7 @@ class FeatureGraphVirtual(FeatureGraph):
         else:
             radii = [cutoff] * len(atoms)
         neighborhood = NeighborList(
-            radii, skin=0.0, self_interaction=self_interaction, bothways=True
+            radii, skin=0.0, self_interaction=self_interaction, bothways=True, primitive=ase.neighborlist.NewPrimitiveNeighborList
         )
         neighborhood.update(atoms)
 
@@ -52,7 +52,7 @@ class FeatureGraphVirtual(FeatureGraph):
                 dist = np.sqrt(np.dot(dist_vec, dist_vec))
 
                 connections.append([jj, ii])
-                connections_offset.append(np.vstack((offs, np.zeros(3, float))))
+                connections_offset.append([[offs[0], offs[1], offs[2]], [0,0,0]])
                 edges.append([dist])
 
         if len(edges) == 0:
@@ -66,7 +66,7 @@ class FeatureGraphVirtual(FeatureGraph):
             atom_positions,
             np.array(edges),
             np.array(connections),
-            np.stack(connections_offset, axis=0),
+            np.array(connections_offset),
             unitcell,
         )
 
