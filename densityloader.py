@@ -1,4 +1,6 @@
 import numpy as np
+import multiprocessing
+import itertools
 import msgnet
 import ase
 import warnings
@@ -107,15 +109,29 @@ class VaspChargeDataLoader(msgnet.dataloader.DataLoader):
 
     def _preprocess(self):
         num_pos = np.prod(self.grid_pos.shape[0:3])
+        probe_pos = []
+        target_density = []
         for i in range(num_pos):
+            grid_index = np.unravel_index(i, self.grid_pos.shape[0:3])
+            probe_pos.append(self.grid_pos[tuple(grid_index)])
+            target_density.append(self.density[tuple(grid_index)])
+
+        pool = multiprocessing.Pool(4)
+        input_params = zip(
+            itertools.repeat(self.atoms, len(probe_pos)),
+            probe_pos,
+            target_density,
+            itertools.repeat(self.cutoff_radius, len(probe_pos)))
+        for i, res in enumerate(pool.imap(preprocess_worker, input_params)):
             if i % 100 == 0:
                 print("%010d    " % i, sep="", end="\r")
-            grid_index = np.unravel_index(i, self.grid_pos.shape[0:3])
-            probe_pos = self.grid_pos[tuple(grid_index)]
-            target_density = self.density[tuple(grid_index)]
-            atom_copy = self.atoms.copy()
-            probe_atom = ase.atom.Atom(0, probe_pos)
-            atom_copy.append(probe_atom)
-            graphobj = FeatureGraphVirtual(atom_copy, "const", self.cutoff_radius, lambda x: x, density=target_density)
-            yield graphobj
+            yield res
+        pool.close()
         print("")
+
+def preprocess_worker(input_tuple):
+    atom, probe_pos, target_density, cutoff_radius = input_tuple
+    probe_atom = ase.atom.Atom(0, probe_pos)
+    atom.append(probe_atom)
+    graphobj = FeatureGraphVirtual(atom, "const", cutoff_radius, lambda x: x, density=target_density)
+    return graphobj
