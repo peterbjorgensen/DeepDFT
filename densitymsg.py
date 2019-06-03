@@ -293,6 +293,7 @@ class DensityMsgPassing:
                         only_messages=True,
                     )
             with tf.variable_scope("edge_update_special" + scope_suffix, reuse=reuse):
+                if use_edge_updates and (i < (num_passes - 1)):
                     edges_special = compute_messages(
                         hidden_state,
                         sym_conn_special,
