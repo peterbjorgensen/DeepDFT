@@ -157,6 +157,9 @@ class DensityMsgPassing:
             "set_lengths": self.sym_set_len,
         }
 
+        sym_conn_dest = tf.gather(self.sym_nodes, self.sym_conn[:,1])
+        sym_conn_is_special = tf.equal(sym_conn_dest, 0)
+
         # Setup constants for normalizing/denormalizing graph level outputs
         self.sym_target_mean = tf.get_variable(
             "target_mean",
@@ -197,13 +200,18 @@ class DensityMsgPassing:
 
         hidden_state_len = int(hidden_state.get_shape()[1])
 
+        sym_conn_normal = tf.boolean_mask(self.sym_conn, tf.logical_not(sym_conn_is_special))
+        sym_conn_special = tf.boolean_mask(self.sym_conn, sym_conn_is_special)
+        init_edges_normal = tf.boolean_mask(init_edges, tf.logical_not(sym_conn_is_special))
+        init_edges_special = tf.boolean_mask(init_edges, sym_conn_is_special)
+
         # Setup edge update function
         if use_edge_updates:
             edge_msg_fn = edge_update
-            edges = compute_messages(
+            edges_normal = compute_messages(
                 hidden_state,
-                self.sym_conn,
-                init_edges,
+                sym_conn_normal,
+                init_edges_normal,
                 edge_msg_fn,
                 tf.identity,
                 include_receiver=True,
@@ -211,7 +219,22 @@ class DensityMsgPassing:
                 only_messages=True,
             )
         else:
-            edges = init_edges
+            edges_normal = init_edges_normal
+
+        if use_edge_updates:
+            edge_msg_fn = edge_update
+            edges_special = compute_messages(
+                hidden_state,
+                sym_conn_special,
+                init_edges_special,
+                edge_msg_fn,
+                tf.identity,
+                include_receiver=True,
+                include_sender=True,
+                only_messages=True,
+            )
+        else:
+            edges_special = init_edges_special
 
         # Setup interaction messages
         msg_fn = create_msg_function(hidden_state_len)
@@ -223,29 +246,57 @@ class DensityMsgPassing:
             else:
                 scope_suffix = "%d" % i
                 reuse = False
-            with tf.variable_scope("msg" + scope_suffix, reuse=reuse):
-                sum_msg = compute_messages(
+            with tf.variable_scope("msg_normal" + scope_suffix, reuse=reuse):
+                sum_msg_normal = compute_messages(
                     hidden_state,
-                    self.sym_conn,
-                    edges,
+                    sym_conn_normal,
+                    edges_normal,
                     msg_fn,
                     act_fn,
                     include_receiver=True,
                     mean_messages=avg_msg,
                 )
-            with tf.variable_scope("update" + scope_suffix, reuse=reuse):
+            with tf.variable_scope("msg_special" + scope_suffix, reuse=reuse):
+                sum_msg_special = compute_messages(
+                    hidden_state,
+                    sym_conn_special,
+                    edges_special,
+                    msg_fn,
+                    act_fn,
+                    include_receiver=True,
+                    mean_messages=avg_msg,
+                )
+            with tf.variable_scope("update_normal" + scope_suffix, reuse=reuse):
                 hidden_state += msgnet.defaults.mlp(
-                    sum_msg,
+                    sum_msg_normal,
                     [hidden_state_len, hidden_state_len],
                     activation=msgnet.defaults.nonlinearity,
                     weights_initializer=msgnet.defaults.initializer,
                 )
-            with tf.variable_scope("edge_update" + scope_suffix, reuse=reuse):
+            with tf.variable_scope("update_special" + scope_suffix, reuse=reuse):
+                hidden_state += msgnet.defaults.mlp(
+                    sum_msg_special,
+                    [hidden_state_len, hidden_state_len],
+                    activation=msgnet.defaults.nonlinearity,
+                    weights_initializer=msgnet.defaults.initializer,
+                )
+            with tf.variable_scope("edge_update_normal" + scope_suffix, reuse=reuse):
                 if use_edge_updates and (i < (num_passes - 1)):
-                    edges = compute_messages(
+                    edges_normal = compute_messages(
                         hidden_state,
-                        self.sym_conn,
-                        edges,
+                        sym_conn_normal,
+                        edges_normal,
+                        edge_msg_fn,
+                        tf.identity,
+                        include_receiver=True,
+                        include_sender=True,
+                        only_messages=True,
+                    )
+            with tf.variable_scope("edge_update_special" + scope_suffix, reuse=reuse):
+                    edges_special = compute_messages(
+                        hidden_state,
+                        sym_conn_special,
+                        edges_special,
                         edge_msg_fn,
                         tf.identity,
                         include_receiver=True,
@@ -258,7 +309,7 @@ class DensityMsgPassing:
         # Setup readout function
         with tf.variable_scope("readout_edge"):
             if self.edge_output_fn is not None:
-                self.edge_out = edge_output_fn(edges)
+                self.edge_out = edge_output_fn(edges_normal)
         with tf.variable_scope("readout_graph"):
             if self.readout_fn is not None:
                 graph_out = self.readout_fn(nodes_out, self.sym_segments)

@@ -30,19 +30,19 @@ class ReadoutLastnode(msgnet.readout.ReadoutFunction):
         return graph_out
 
 def get_model():
-    embedding_size = 64
+    embedding_size = 128
 
     model = densitymsg.DensityMsgPassing(
         embedding_shape=(len(ase.data.chemical_symbols), embedding_size),
         edge_feature_expand=[(0, 0.01, CUTOFF_ANGSTROM+1)],
-        use_edge_updates=False,
+        use_edge_updates=True,
         readout_fn=ReadoutLastnode())
 
     return model
 
 def main():
     densityloader = VaspChargeDataLoader("si30/CHGCAR", CUTOFF_ANGSTROM, 5)
-    graph_obj_list = densityloader.load()[0:20]
+    graph_obj_list = densityloader.load()
 
     data_handler = msgnet.datahandler.EdgeSelectDataHandler(graph_obj_list, ["density"], [0])
 
