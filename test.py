@@ -1,4 +1,5 @@
 import sys
+import argparse
 import os
 import timeit
 import logging
@@ -12,6 +13,16 @@ from densityloader import VaspChargeDataLoader
 from ase.neighborlist import NeighborList
 
 CUTOFF_ANGSTROM = 5.0
+
+def get_arguments(arg_list=None):
+    parser = argparse.ArgumentParser(
+        description="Train graph convolution network", fromfile_prefix_chars="@"
+    )
+    parser.add_argument("--load_model", type=str, default=None)
+    parser.add_argument("--plot_density", type=str, default=None)
+    parser.add_argument("--learning_rate", type=float, default=1e-4)
+
+    return parser.parse_args(arg_list)
 
 class ReadoutLastnode(msgnet.readout.ReadoutFunction):
     is_sum = False
@@ -40,7 +51,7 @@ def get_model():
 
     return model
 
-def main():
+def main(args):
     densityloader = VaspChargeDataLoader("si30/CHGCAR", CUTOFF_ANGSTROM, 5)
     graph_obj_list = densityloader.load()
 
@@ -50,7 +61,7 @@ def main():
 
     model = get_model()
 
-    trainer = msgnet.train.GraphOutputTrainer(model, data_handler, batch_size=batch_size)
+    trainer = msgnet.train.GraphOutputTrainer(model, data_handler, batch_size=batch_size, initial_lr=args.learning_rate)
 
     num_steps = int(1e6)
     start_step = 0
@@ -62,6 +73,22 @@ def main():
 
     with tf.Session() as sess:
         sess.run(tf.global_variables_initializer())
+
+        if args.load_model:
+            if args.load_model.endswith(".meta"):
+                checkpoint = args.load_model.replace(".meta", "")
+                logging.info("loading model from %s", checkpoint)
+                start_step = int(checkpoint.split("/")[-1].split("-")[-1])
+                model.load(sess, checkpoint)
+            else:
+                checkpoint = tf.train.get_checkpoint_state(args.load_model)
+                logging.info("loading model from %s", checkpoint)
+                start_step = int(
+                    checkpoint.model_checkpoint_path.split("/")[-1].split("-")[-1]
+                )
+                model.load(sess, checkpoint.model_checkpoint_path)
+        else:
+            start_step = 0
 
         # Print shape of all trainable variables
         trainable_vars = tf.trainable_variables()
@@ -133,6 +160,7 @@ def plot_prediction(model_file):
     from mayavi import mlab
     model = get_model()
     densityloader = VaspChargeDataLoader("si30/CHGCAR", CUTOFF_ANGSTROM, 5)
+    densityloader = VaspChargeDataLoader("pbe0/CHGCAR", CUTOFF_ANGSTROM, 1, prefix="pbe")
     graph_obj_list = densityloader.load()
 
     data_handler = msgnet.datahandler.EdgeSelectDataHandler(graph_obj_list, ["density"], [0])
@@ -158,12 +186,19 @@ def plot_prediction(model_file):
     pred_density = pred_density.reshape(densityloader.grid_pos.shape[0:3])
     target_density = target_density.reshape(densityloader.grid_pos.shape[0:3])
 
+    errors = target_density-pred_density
+    rmse = np.sqrt(np.mean(np.square(errors)))
+    mae = np.mean(np.abs(errors))
+
+    print("mae=%f, rmse=%f" % (mae, rmse))
+
     x = densityloader.grid_pos[:,:,:,0]
     y = densityloader.grid_pos[:,:,:,1]
     z = densityloader.grid_pos[:,:,:,2]
 
     mlab.contour3d(x,y,z,pred_density)
     mlab.contour3d(x,y,z,target_density)
+    mlab.contour3d(x,y,z,errors)
 
     mlab.show()
 
@@ -179,7 +214,8 @@ if __name__ == "__main__":
             logging.StreamHandler(),
         ],
     )
-    if len(sys.argv) > 1:
-        plot_prediction(sys.argv[1])
+    args = get_arguments()
+    if args.plot_density:
+        plot_prediction(args.plot_density)
     else:
-        main()
+        main(args)
