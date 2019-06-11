@@ -274,7 +274,14 @@ class DensityMsgPassing:
                     weights_initializer=msgnet.defaults.initializer,
                 )
             with tf.variable_scope("update_special" + scope_suffix, reuse=reuse):
-                hidden_state += msgnet.defaults.mlp(
+                gate_var = tf.get_variable(
+                    "gate",
+                    dtype=tf.float32,
+                    shape=[hidden_state_len],
+                    trainable=True,
+                    initializer=tf.constant_initializer(1.),
+                )
+                hidden_state = hidden_state*gate_var + msgnet.defaults.mlp(
                     sum_msg_special,
                     [hidden_state_len, hidden_state_len],
                     activation=msgnet.defaults.nonlinearity,
