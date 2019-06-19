@@ -194,14 +194,14 @@ class DensityMsgPassing:
         }
 
         unitcells = tf.gather(self.sym_unitcells, self.sym_edges_segments)
-        node_offset = tf.linalg.matmul(self.sym_conn_offset, unitcells)
+        node_offset = tf.matmul(self.sym_conn_offset, unitcells)
         node_unitcell_pos = tf.gather(self.sym_nodes_xyz, self.sym_conn)
         conn_pos = node_unitcell_pos + node_offset
         conn_diff = conn_pos[:, 1] - conn_pos[:, 0]
         conn_dist = tf.sqrt(tf.reduce_sum(tf.square(conn_diff), axis=-1)) # edge_count
 
         probe_unitcells = tf.gather(self.sym_unitcells, self.sym_probe_conn[:, 1])
-        node_offset = tf.linalg.matmul(tf.expand_dims(self.sym_probe_conn_offset[:, 0], 1), probe_unitcells)
+        node_offset = tf.matmul(tf.expand_dims(self.sym_probe_conn_offset[:, 0], 1), probe_unitcells)
         node_unitcell_pos = tf.gather(self.sym_nodes_xyz, self.sym_probe_conn[:, 0])
         conn_pos = node_unitcell_pos + tf.squeeze(node_offset, axis=1)
         probe_unitcell_pos = tf.gather(self.sym_probe_xyz, self.sym_probe_conn[:, 1]) # edge_count, probe_count, 3
