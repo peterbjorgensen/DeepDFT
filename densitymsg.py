@@ -1,7 +1,15 @@
-import msgnet
-import tensorflow as tf
 import numpy as np
+import tensorflow as tf
 from tensorflow.contrib import layers
+import msgnet
+
+def repeat(data, n_repeats, axis):
+    assert axis==0
+    multiples = tf.stack((1, n_repeats), 0)
+    final_shape = tf.stack((n_repeats, 1)) * tf.shape(data)
+    tiled = tf.tile(data, multiples=multiples)
+    repeated = tf.reshape(tiled, final_shape)
+    return repeated
 
 def compute_messages(
     nodes,
@@ -9,6 +17,7 @@ def compute_messages(
     edges,
     message_fn,
     act_fn,
+    receiver_nodes=None,
     include_receiver=True,
     include_sender=True,
     only_messages=False,
@@ -20,30 +29,41 @@ def compute_messages(
     :param edges: (n_edges, n_edge_features) tensor of edge features, float32.
     :param message_fn: message function, will be called with two inputs with shapes (n_edges, K*n_node_features), (n_edges,n_edge_features), where K is 2 if include_receiver=True and 1 otherwise, and must return a tensor of size (n_edges, n_output)
     :param act_fn: A pointwise activation function applied after the sum.
+    :param reveiver_nodes: (n_receive_nodes, n_node_features) If given, use these nodes for receiver
     :param include_receiver: Include receiver node in computation of messages.
     :param include_sender: Include sender node in computation of messages.
     :param only_messages: Do not sum up messages
     :return: (n_edges, n_output) if only_messages is True, otherwise (n_nodes, n_output) Sum of messages arriving at each node.
     """
-    n_nodes = tf.shape(nodes)[0]
+    if receiver_nodes is not None:
+        n_nodes = tf.shape(receiver_nodes)[0]
+    else:
+        n_nodes = tf.shape(nodes)[0]
+
     n_node_features = nodes.get_shape()[1].value
     n_edge_features = edges.get_shape()[1].value
 
     if include_receiver and include_sender:
         # Use both receiver and sender node features in message computation
-        message_inputs = tf.gather(nodes, conn)  # n_edges, 2, n_node_features
-        reshaped = tf.reshape(message_inputs, (-1, 2 * n_node_features))
+        if receiver_nodes is not None:
+            from_nodes = tf.gather(nodes, conn[:, 0])
+            to_nodes = tf.gather(receiver_nodes, conn[:, 1])
+            message_inputs = tf.concat((from_nodes, to_nodes), axis=1)
+        else:
+            message_inputs = tf.gather(nodes, conn)  # n_edges, 2, n_node_features
+            message_inputs = tf.reshape(message_inputs, (-1, 2 * n_node_features))
     elif include_sender:  # Only use sender node features (index=0)
         message_inputs = tf.gather(nodes, conn[:, 0])  # n_edges, n_node_features
-        reshaped = message_inputs
     elif include_receiver:  # Only use receiver node features (index=1)
-        message_inputs = tf.gather(nodes, conn[:, 1])  # n_edges, n_node_features
-        reshaped = message_inputs
+        if receiver_nodes is not None:
+            message_inputs = tf.gather(receiver_nodes, conn[:, 1])
+        else:
+            message_inputs = tf.gather(nodes, conn[:, 1])  # n_edges, n_node_features
     else:
         raise ValueError(
             "Messages must include at least one of sender and receiver nodes"
         )
-    messages = message_fn(reshaped, edges)  # n_edges, n_output
+    messages = message_fn(message_inputs, edges)  # n_edges, n_output
 
     if only_messages:
         return messages
@@ -115,11 +135,11 @@ class DensityMsgPassing:
         edge_feature_expand=None,
         msg_share_weights=False,
         use_edge_updates=False,
-        readout_fn=None,
         edge_output_fn=None,
         avg_msg=False,
         target_mean=0.0,
         target_std=1.0,
+        hard_cutoff=6.0,
     ):
         """__init__
 
@@ -138,27 +158,68 @@ class DensityMsgPassing:
             self.sym_nodes = tf.placeholder(
                 np.float32, shape=(None, n_node_features), name="sym_nodes"
             )
+        self.sym_nodes_xyz = tf.placeholder(np.float32, shape=(None, 3), name="sym_nodes_xyz")
+
         self.sym_edges = tf.placeholder(
             np.float32, shape=(None, n_edge_features), name="sym_edges"
         )
-        self.readout_fn = readout_fn
         self.edge_output_fn = edge_output_fn
         self.sym_conn = tf.placeholder(np.int32, shape=(None, 2), name="sym_conn")
+        self.sym_conn_offset = tf.placeholder(np.float32, shape=(None, 2, 3), name="sym_conn_offset")
         self.sym_segments = tf.placeholder(
             np.int32, shape=(None,), name="sym_segments_map"
         )
+        self.sym_edges_segments = tf.placeholder(
+            np.int32, shape=(None,), name="sym_edges_segments"
+        )
         self.sym_set_len = tf.placeholder(np.int32, shape=(None,), name="sym_set_len")
+        self.sym_edges_len = tf.placeholder(np.int32, shape=(None,), name="sym_edges_len")
+        self.sym_probe_conn = tf.placeholder(np.int32, shape=(None, 2), name="sym_probe_conn")
+        self.sym_probe_conn_offset = tf.placeholder(np.float32, shape=(None, 2, 3), name="sym_probe_conn_offset")
+        self.sym_probe_xyz = tf.placeholder(np.float32, shape=(None, None, 3), name="sym_probe_xyz")
+        self.sym_unitcells = tf.placeholder(np.float32, shape=(None, 3, 3), name="unitcells")
 
         self.input_symbols = {
             "nodes": self.sym_nodes,
-            "edges": self.sym_edges,
+            "nodes_xyz": self.sym_nodes_xyz,
             "connections": self.sym_conn,
+            "connections_offset": self.sym_conn_offset,
+            "probes_xyz": self.sym_probe_xyz,
+            "probes_connection": self.sym_probe_conn,
+            "probes_connection_offset": self.sym_probe_conn_offset,
             "segments": self.sym_segments,
+            "unitcells": self.sym_unitcells,
             "set_lengths": self.sym_set_len,
+            "edges_segments": self.sym_edges_segments,
         }
 
-        sym_conn_dest = tf.gather(self.sym_nodes, self.sym_conn[:,1])
-        sym_conn_is_special = tf.equal(sym_conn_dest, 0)
+        unitcells = tf.gather(self.sym_unitcells, self.sym_edges_segments)
+        node_offset = tf.linalg.matmul(self.sym_conn_offset, unitcells)
+        node_unitcell_pos = tf.gather(self.sym_nodes_xyz, self.sym_conn)
+        conn_pos = node_unitcell_pos + node_offset
+        conn_diff = conn_pos[:, 1] - conn_pos[:, 0]
+        conn_dist = tf.sqrt(tf.reduce_sum(tf.square(conn_diff), axis=-1)) # edge_count
+
+        probe_unitcells = tf.gather(self.sym_unitcells, self.sym_probe_conn[:, 1])
+        node_offset = tf.linalg.matmul(tf.expand_dims(self.sym_probe_conn_offset[:, 0], 1), probe_unitcells)
+        node_unitcell_pos = tf.gather(self.sym_nodes_xyz, self.sym_probe_conn[:, 0])
+        conn_pos = node_unitcell_pos + tf.squeeze(node_offset, axis=1)
+        probe_unitcell_pos = tf.gather(self.sym_probe_xyz, self.sym_probe_conn[:, 1]) # edge_count, probe_count, 3
+        conn_pos = tf.expand_dims(conn_pos, 1) # edge_count, 1, 3
+        conn_diff = conn_pos - probe_unitcell_pos
+        probe_dist = tf.sqrt(tf.reduce_sum(tf.square(conn_diff), axis=-1)) # probe_edge_count, probe_count
+        probe_count = tf.shape(probe_dist)[1]
+        probe_dist_flat = tf.reshape(probe_dist, (-1,1)) # probe_edge_count x probe_count
+        repeated_conns = repeat(self.sym_probe_conn, probe_count, 0)
+        repeated_conns_from = repeated_conns[:, 0] # probe_edge_count x probe_count
+        repeated_conns_to = repeated_conns[:, 1] * probe_count
+        repeated_conns_to = repeated_conns_to + tf.tile(tf.range(0, probe_count, dtype=tf.int32), [tf.shape(self.sym_probe_conn)[0]]) # probe_edge_count x probe_count
+        repeated_conns = tf.stack((repeated_conns_from, repeated_conns_to), 1)
+
+        probe_conn_mask = tf.less(tf.squeeze(probe_dist_flat, axis=1), hard_cutoff)
+        sym_probe_dist = tf.boolean_mask(probe_dist_flat, probe_conn_mask, axis=0)
+        sym_probe_conn = tf.boolean_mask(repeated_conns, probe_conn_mask, axis=0)
+
 
         # Setup constants for normalizing/denormalizing graph level outputs
         self.sym_target_mean = tf.get_variable(
@@ -176,12 +237,13 @@ class DensityMsgPassing:
             initializer=tf.constant_initializer(target_std),
         )
 
+        sym_edges = tf.expand_dims(conn_dist, 1)
         if edge_feature_expand is not None:
             init_edges = msgnet.utilities.gaussian_expansion(
-                self.sym_edges, edge_feature_expand
+                sym_edges, edge_feature_expand
             )
         else:
-            init_edges = self.sym_edges
+            init_edges = sym_edges
 
         if embedding_shape is not None:
             # Setup embedding matrix
@@ -200,18 +262,13 @@ class DensityMsgPassing:
 
         hidden_state_len = int(hidden_state.get_shape()[1])
 
-        sym_conn_normal = tf.boolean_mask(self.sym_conn, tf.logical_not(sym_conn_is_special))
-        sym_conn_special = tf.boolean_mask(self.sym_conn, sym_conn_is_special)
-        init_edges_normal = tf.boolean_mask(init_edges, tf.logical_not(sym_conn_is_special))
-        init_edges_special = tf.boolean_mask(init_edges, sym_conn_is_special)
-
         # Setup edge update function
         if use_edge_updates:
             edge_msg_fn = edge_update
-            edges_normal = compute_messages(
+            edges = compute_messages(
                 hidden_state,
-                sym_conn_normal,
-                init_edges_normal,
+                self.sym_conn,
+                init_edges,
                 edge_msg_fn,
                 tf.identity,
                 include_receiver=True,
@@ -219,26 +276,12 @@ class DensityMsgPassing:
                 only_messages=True,
             )
         else:
-            edges_normal = init_edges_normal
-
-        if use_edge_updates:
-            edge_msg_fn = edge_update
-            edges_special = compute_messages(
-                hidden_state,
-                sym_conn_special,
-                init_edges_special,
-                edge_msg_fn,
-                tf.identity,
-                include_receiver=True,
-                include_sender=True,
-                only_messages=True,
-            )
-        else:
-            edges_special = init_edges_special
+            edges = init_edges
 
         # Setup interaction messages
         msg_fn = create_msg_function(hidden_state_len)
         act_fn = tf.identity
+        hidden_states_list = []
         for i in range(num_passes):
             if msg_share_weights:
                 scope_suffix = ""
@@ -246,58 +289,30 @@ class DensityMsgPassing:
             else:
                 scope_suffix = "%d" % i
                 reuse = False
-            with tf.variable_scope("msg_normal" + scope_suffix, reuse=reuse):
-                sum_msg_normal = compute_messages(
+            with tf.variable_scope("msg" + scope_suffix, reuse=reuse):
+                sum_msg = compute_messages(
                     hidden_state,
-                    sym_conn_normal,
-                    edges_normal,
+                    self.sym_conn,
+                    edges,
                     msg_fn,
                     act_fn,
                     include_receiver=True,
                     mean_messages=avg_msg,
                 )
-            with tf.variable_scope("msg_special" + scope_suffix, reuse=reuse):
-                sum_msg_special = compute_messages(
-                    hidden_state,
-                    sym_conn_special,
-                    edges_special,
-                    msg_fn,
-                    act_fn,
-                    include_receiver=True,
-                    mean_messages=avg_msg,
-                )
-            with tf.variable_scope("update_normal" + scope_suffix, reuse=reuse):
+            with tf.variable_scope("update" + scope_suffix, reuse=reuse):
                 hidden_state += msgnet.defaults.mlp(
-                    sum_msg_normal,
+                    sum_msg,
                     [hidden_state_len, hidden_state_len],
                     activation=msgnet.defaults.nonlinearity,
                     weights_initializer=msgnet.defaults.initializer,
                 )
-            with tf.variable_scope("update_special" + scope_suffix, reuse=reuse):
-                hidden_state += msgnet.defaults.mlp(
-                    sum_msg_special,
-                    [hidden_state_len, hidden_state_len],
-                    activation=msgnet.defaults.nonlinearity,
-                    weights_initializer=msgnet.defaults.initializer,
-                )
-            with tf.variable_scope("edge_update_normal" + scope_suffix, reuse=reuse):
+                hidden_states_list.append(hidden_state)
+            with tf.variable_scope("edge_update" + scope_suffix, reuse=reuse):
                 if use_edge_updates and (i < (num_passes - 1)):
-                    edges_normal = compute_messages(
+                    edges = compute_messages(
                         hidden_state,
-                        sym_conn_normal,
-                        edges_normal,
-                        edge_msg_fn,
-                        tf.identity,
-                        include_receiver=True,
-                        include_sender=True,
-                        only_messages=True,
-                    )
-            with tf.variable_scope("edge_update_special" + scope_suffix, reuse=reuse):
-                if use_edge_updates and (i < (num_passes - 1)):
-                    edges_special = compute_messages(
-                        hidden_state,
-                        sym_conn_special,
-                        edges_special,
+                        self.sym_conn,
+                        edges,
                         edge_msg_fn,
                         tf.identity,
                         include_receiver=True,
@@ -305,27 +320,65 @@ class DensityMsgPassing:
                         only_messages=True,
                     )
 
-            nodes_out = tf.identity(hidden_state, name="nodes_out")
+        # Setup probe messages
+        zeros_dims = tf.stack([tf.shape(self.sym_probe_xyz)[0]*tf.shape(self.sym_probe_xyz)[1], embedding_shape[1]])
+        probe_state = tf.fill(zeros_dims, 0.0)
 
-        # Setup readout function
-        with tf.variable_scope("readout_edge"):
-            if self.edge_output_fn is not None:
-                self.edge_out = edge_output_fn(edges_normal)
-        with tf.variable_scope("readout_graph"):
-            if self.readout_fn is not None:
-                graph_out = self.readout_fn(nodes_out, self.sym_segments)
-
-        self.nodes_out = nodes_out
-        self.graph_out_normalized = tf.identity(graph_out, name="graph_out_normalized")
-
-        # Denormalize graph_out for making predictions on original scale
-        if self.readout_fn.is_sum:
-            mean = self.sym_target_mean * tf.expand_dims(
-                tf.cast(self.sym_set_len, tf.float32), -1
+        probe_edges = sym_probe_dist
+        if edge_feature_expand is not None:
+            probe_edges = msgnet.utilities.gaussian_expansion(
+                probe_edges, edge_feature_expand
             )
-        else:
-            mean = self.sym_target_mean
-        self.graph_out = tf.add(graph_out * self.sym_target_std, mean, name="graph_out")
+        for i in range(num_passes):
+            if msg_share_weights:
+                scope_suffix = ""
+                reuse = i > 0
+            else:
+                scope_suffix = "%d" % i
+                reuse = False
+            with tf.variable_scope("probe_msg" + scope_suffix, reuse=reuse):
+                sum_msg = compute_messages(
+                    hidden_states_list[i],
+                    sym_probe_conn,
+                    probe_edges,
+                    msg_fn,
+                    act_fn,
+                    receiver_nodes=probe_state,
+                    include_receiver=True,
+                    mean_messages=avg_msg,
+                )
+            with tf.variable_scope("probe_update" + scope_suffix, reuse=reuse):
+                probe_state += msgnet.defaults.mlp(
+                    sum_msg,
+                    [hidden_state_len, hidden_state_len],
+                    activation=msgnet.defaults.nonlinearity,
+                    weights_initializer=msgnet.defaults.initializer,
+                )
+            with tf.variable_scope("probe_edge_update" + scope_suffix, reuse=reuse):
+                if use_edge_updates and (i < (num_passes - 1)):
+                    probe_edges = compute_messages(
+                        hidden_states_list[i],
+                        sym_probe_conn,
+                        probe_edges,
+                        edge_msg_fn,
+                        tf.identity,
+                        receiver_nodes=probe_state,
+                        include_receiver=True,
+                        include_sender=True,
+                        only_messages=True,
+                    )
+
+        self.nodes_out = probe_state
+        # Readout probe_state
+        density = msgnet.defaults.mlp(
+            probe_state,
+            [hidden_state_len, hidden_state_len, hidden_state_len, 1],
+            activation=msgnet.defaults.nonlinearity,
+            weights_initializer=msgnet.defaults.initializer,
+        )
+
+        self.graph_out_normalized = tf.reshape(density, tf.shape(self.sym_probe_xyz)[0:2], name="graph_out_normalized")
+        self.graph_out = tf.add(self.graph_out_normalized * self.sym_target_std, self.sym_target_mean, name="graph_out")
 
         self.saver = tf.train.Saver(keep_checkpoint_every_n_hours=24, max_to_keep=3)
 
@@ -339,25 +392,13 @@ class DensityMsgPassing:
         return self.nodes_out
 
     def get_graph_out(self):
-        if self.readout_fn is None:
-            raise NotImplementedError("No readout function given")
         return self.graph_out
 
     def get_graph_out_normalized(self):
-        if self.readout_fn is None:
-            raise NotImplementedError("No readout function given")
         return self.graph_out_normalized
 
     def get_normalization(self):
         return self.sym_target_mean, self.sym_target_std
-
-    def get_readout_function(self):
-        return self.readout_fn
-
-    def get_edges_out(self):
-        if self.edge_output_fn is None:
-            raise NotImplementedError("No edges output network given")
-        return self.edge_out
 
     def get_input_symbols(self):
         return self.input_symbols

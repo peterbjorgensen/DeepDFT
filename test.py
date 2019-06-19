@@ -10,6 +10,8 @@ import tensorflow as tf
 import numpy as np
 import densitymsg
 from densityloader import VaspChargeDataLoader
+from densityhandler import DensityDataHandler
+from trainer import DensityOutputTrainer
 from ase.neighborlist import NeighborList
 
 CUTOFF_ANGSTROM = 5.0
@@ -47,21 +49,21 @@ def get_model():
         embedding_shape=(len(ase.data.chemical_symbols), embedding_size),
         edge_feature_expand=[(0, 0.01, CUTOFF_ANGSTROM+1)],
         use_edge_updates=True,
-        readout_fn=ReadoutLastnode())
+        hard_cutoff=CUTOFF_ANGSTROM)
 
     return model
 
-def main(args):
-    densityloader = VaspChargeDataLoader("si30/CHGCAR", CUTOFF_ANGSTROM, 5)
+def train_model(args, logs_path):
+    densityloader = VaspChargeDataLoader("vaspchgcar.tar.gz", CUTOFF_ANGSTROM)
     graph_obj_list = densityloader.load()
 
-    data_handler = msgnet.datahandler.EdgeSelectDataHandler(graph_obj_list, ["density"], [0])
+    data_handler = DensityDataHandler(graph_obj_list)
 
-    batch_size = 20
+    batch_size = 1
 
     model = get_model()
 
-    trainer = msgnet.train.GraphOutputTrainer(model, data_handler, batch_size=batch_size, initial_lr=args.learning_rate)
+    trainer = DensityOutputTrainer(model, data_handler, batch_size=batch_size, initial_lr=args.learning_rate)
 
     num_steps = int(1e6)
     start_step = 0
@@ -95,6 +97,8 @@ def main(args):
         for var, val in zip(trainable_vars, sess.run(trainable_vars)):
             logging.debug("%s %s", var.name, var.get_shape())
 
+        logging.debug("starting training")
+
         for update_step in range(start_step, num_steps):
             trainer.step(sess, update_step)
 
@@ -103,7 +107,7 @@ def main(args):
 
                 # Evaluate training set
                 train_metrics = trainer.evaluate_metrics(
-                    sess, train_obj, prefix="train"
+                    sess, train_obj, prefix="train", decimation=1000
                 )
 
                 # Evaluate validation set
@@ -159,8 +163,7 @@ def main(args):
 def plot_prediction(model_file):
     from mayavi import mlab
     model = get_model()
-    densityloader = VaspChargeDataLoader("si30/CHGCAR", CUTOFF_ANGSTROM, 5)
-    densityloader = VaspChargeDataLoader("pbe0/CHGCAR", CUTOFF_ANGSTROM, 1, prefix="pbe")
+    densityloader = VaspChargeDataLoader("vaspchgcar.zip", CUTOFF_ANGSTROM)
     graph_obj_list = densityloader.load()
 
     data_handler = msgnet.datahandler.EdgeSelectDataHandler(graph_obj_list, ["density"], [0])
@@ -202,8 +205,7 @@ def plot_prediction(model_file):
 
     mlab.show()
 
-
-if __name__ == "__main__":
+def main(_):
     logs_path = "logs/"
     os.makedirs(logs_path, exist_ok=True)
     logging.basicConfig(
@@ -214,8 +216,12 @@ if __name__ == "__main__":
             logging.StreamHandler(),
         ],
     )
+    logging.debug("ping")
     args = get_arguments()
     if args.plot_density:
         plot_prediction(args.plot_density)
     else:
-        main(args)
+        train_model(args, logs_path)
+
+if __name__ == "__main__":
+    tf.app.run()
