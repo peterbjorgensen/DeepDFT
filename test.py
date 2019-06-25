@@ -58,18 +58,17 @@ def train_model(args, logs_path):
     graph_obj_list = densityloader.load()
 
     data_handler = DensityDataHandler(graph_obj_list)
+    train_handler, _, validation_handler = data_handler.train_test_split(split_type="count", validation_size=3, test_size=0)
 
     batch_size = 1
 
     model = get_model()
 
-    trainer = DensityOutputTrainer(model, data_handler, batch_size=batch_size, initial_lr=args.learning_rate)
+    trainer = DensityOutputTrainer(model, train_handler, batch_size=batch_size, initial_lr=args.learning_rate)
 
     num_steps = int(1e6)
     start_step = 0
     log_interval = 1000
-    val_obj = None
-    train_obj = data_handler
 
     start_time = timeit.default_timer()
 
@@ -107,12 +106,12 @@ def train_model(args, logs_path):
 
                 # Evaluate training set
                 train_metrics = trainer.evaluate_metrics(
-                    sess, train_obj, prefix="train", decimation=1000
+                    sess, train_handler, prefix="train", decimation=1000
                 )
 
                 # Evaluate validation set
-                if val_obj:
-                    val_metrics = trainer.evaluate_metrics(sess, val_obj, prefix="val")
+                if validation_handler:
+                    val_metrics = trainer.evaluate_metrics(sess, validation_handler, prefix="val")
                 else:
                     val_metrics = {}
 
@@ -134,7 +133,7 @@ def train_model(args, logs_path):
                 start_time = timeit.default_timer()
 
                 # Do early stopping using validation data (if available)
-                if val_obj:
+                if validation_handler:
                     if all_metrics["val_mae"] < best_val_mae:
                         model.save(
                             sess, logs_path + "model.ckpt", global_step=update_step
