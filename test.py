@@ -70,6 +70,9 @@ def train_model(args, logs_path):
     start_step = 0
     log_interval = 1000
 
+    best_val_mae = np.inf
+    best_val_step = 0
+
     start_time = timeit.default_timer()
 
     with tf.Session() as sess:
