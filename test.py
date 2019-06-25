@@ -48,7 +48,7 @@ def get_model():
     model = densitymsg.DensityMsgPassing(
         embedding_shape=(len(ase.data.chemical_symbols), embedding_size),
         edge_feature_expand=[(0, 0.01, CUTOFF_ANGSTROM+1)],
-        use_edge_updates=True,
+        use_edge_updates=False,
         hard_cutoff=CUTOFF_ANGSTROM)
 
     return model
@@ -109,12 +109,12 @@ def train_model(args, logs_path):
 
                 # Evaluate training set
                 train_metrics = trainer.evaluate_metrics(
-                    sess, train_handler, prefix="train", decimation=1000
+                    sess, train_handler, prefix="train", decimation=100000
                 )
 
                 # Evaluate validation set
                 if validation_handler:
-                    val_metrics = trainer.evaluate_metrics(sess, validation_handler, prefix="val")
+                    val_metrics = trainer.evaluate_metrics(sess, validation_handler, prefix="val", decimation=1000)
                 else:
                     val_metrics = {}
 

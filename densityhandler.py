@@ -23,11 +23,14 @@ class DensityDataHandler(msgnet.datahandler.DataHandler):
         self.modify_dict(training_dict)
         return training_dict
 
-    def get_test_batches(self, probe_count=100):
+    def get_test_batches(self, probe_count=100, decimation=1):
+        global_slice_index = 0
         for gobj in self.graph_objects:
             num_positions = np.prod(gobj.grid_position.shape[0:3])
             num_slices = int(math.ceil(num_positions / probe_count))
             for slice_index in range(num_slices):
+                if (global_slice_index % decimation) != 0:
+                    continue
                 flat_index = np.arange(slice_index*probe_count, min((slice_index+1)*probe_count, num_positions))
                 pos_index = np.unravel_index(flat_index, gobj.grid_position.shape[0:3])
                 target_density = gobj.density[pos_index]
@@ -36,6 +39,7 @@ class DensityDataHandler(msgnet.datahandler.DataHandler):
 
                 self.modify_dict(test_dict)
                 yield test_dict
+                global_slice_index += 1
 
     @staticmethod
     def list_to_matrices(graph_list, probe_pos_list, probe_target_list=None):

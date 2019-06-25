@@ -31,9 +31,7 @@ class DensityOutputTrainer(msgnet.train.Trainer):
         target_mae = 0
         target_mse = 0
         num_vals = 0
-        for i, input_data in enumerate(datahandler.get_test_batches()):
-            if (i % decimation) != 0:
-                continue
+        for input_data in datahandler.get_test_batches(decimation=decimation):
             feed_dict = {}
             for key in self.input_symbols.keys():
                 feed_dict[self.input_symbols[key]] = input_data[key]
