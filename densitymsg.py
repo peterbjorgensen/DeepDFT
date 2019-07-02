@@ -348,7 +348,14 @@ class DensityMsgPassing:
                     mean_messages=avg_msg,
                 )
             with tf.variable_scope("probe_update" + scope_suffix, reuse=reuse):
-                probe_state += msgnet.defaults.mlp(
+                gates = msgnet.defaults.mlp(
+                    probe_state,
+                    [hidden_state_len, hidden_state_len],
+                    activation=msgnet.defaults.nonlinearity,
+                    last_activation=tf.tanh,
+                    weights_initializer=msgnet.defaults.initializer,
+                )
+                probe_state = probe_state*gates + (1.-gates)*msgnet.defaults.mlp(
                     sum_msg,
                     [hidden_state_len, hidden_state_len],
                     activation=msgnet.defaults.nonlinearity,
