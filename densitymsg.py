@@ -17,6 +17,7 @@ def compute_messages(
     edges,
     message_fn,
     act_fn,
+    distances=None,
     receiver_nodes=None,
     include_receiver=True,
     include_sender=True,
@@ -63,7 +64,10 @@ def compute_messages(
         raise ValueError(
             "Messages must include at least one of sender and receiver nodes"
         )
-    messages = message_fn(message_inputs, edges)  # n_edges, n_output
+    if distances is not None:
+        messages = message_fn(message_inputs, edges, distances)  # n_edges, n_output
+    else:
+        messages = message_fn(message_inputs, edges)  # n_edges, n_output
 
     if only_messages:
         return messages
@@ -83,8 +87,8 @@ def compute_messages(
     return act_fn(msg_pool)
 
 
-def create_msg_function(num_outputs, **kwargs):
-    def func(nodes, edges):
+def create_msg_function(num_outputs, cutoff_func=None, **kwargs):
+    def func(nodes, edges, distances=None):
         tf.add_to_collection("msg_input_nodes", nodes)
         tf.add_to_collection("msg_input_edges", edges)
         with tf.variable_scope("gates"):
@@ -106,6 +110,9 @@ def create_msg_function(num_outputs, **kwargs):
                 **kwargs
             )
             tf.add_to_collection("msg_pregates", pre)
+        if distances is not None:
+            assert cutoff_func is not None
+            gates = gates * cutoff_func(distances)
         output = pre * gates
         tf.add_to_collection("msg_outputs", output)
         return output
@@ -279,7 +286,8 @@ class DensityMsgPassing:
             edges = init_edges
 
         # Setup interaction messages
-        msg_fn = create_msg_function(hidden_state_len)
+        soft_cutoff_func = lambda x: 1.-tf.sigmoid(5*(x-(hard_cutoff-1.5)))
+        msg_fn = create_msg_function(hidden_state_len, cutoff_func=soft_cutoff_func)
         act_fn = tf.identity
         hidden_states_list = []
         for i in range(num_passes):
@@ -296,6 +304,7 @@ class DensityMsgPassing:
                     edges,
                     msg_fn,
                     act_fn,
+                    distances=sym_edges,
                     include_receiver=True,
                     mean_messages=avg_msg,
                 )
@@ -343,6 +352,7 @@ class DensityMsgPassing:
                     probe_edges,
                     msg_fn,
                     act_fn,
+                    distances=sym_probe_dist,
                     receiver_nodes=probe_state,
                     include_receiver=True,
                     mean_messages=avg_msg,
@@ -352,7 +362,7 @@ class DensityMsgPassing:
                     probe_state,
                     [hidden_state_len, hidden_state_len],
                     activation=msgnet.defaults.nonlinearity,
-                    last_activation=tf.tanh,
+                    last_activation=tf.sigmoid,
                     weights_initializer=msgnet.defaults.initializer,
                 )
                 probe_state = probe_state*gates + (1.-gates)*msgnet.defaults.mlp(
@@ -361,19 +371,19 @@ class DensityMsgPassing:
                     activation=msgnet.defaults.nonlinearity,
                     weights_initializer=msgnet.defaults.initializer,
                 )
-            with tf.variable_scope("probe_edge_update" + scope_suffix, reuse=reuse):
-                if use_edge_updates and (i < (num_passes - 1)):
-                    probe_edges = compute_messages(
-                        hidden_states_list[i],
-                        sym_probe_conn,
-                        probe_edges,
-                        edge_msg_fn,
-                        tf.identity,
-                        receiver_nodes=probe_state,
-                        include_receiver=True,
-                        include_sender=True,
-                        only_messages=True,
-                    )
+            #with tf.variable_scope("probe_edge_update" + scope_suffix, reuse=reuse):
+                #if use_edge_updates and (i < (num_passes - 1)):
+                    #probe_edges = compute_messages(
+                        #hidden_states_list[i],
+                        #sym_probe_conn,
+                        #probe_edges,
+                        #edge_msg_fn,
+                        #tf.identity,
+                        #receiver_nodes=probe_state,
+                        #include_receiver=True,
+                        #include_sender=True,
+                        #only_messages=True,
+                    #)
 
         self.nodes_out = probe_state
         # Readout probe_state
