@@ -49,12 +49,13 @@ def get_model():
         embedding_shape=(len(ase.data.chemical_symbols), embedding_size),
         edge_feature_expand=[(0, 0.01, CUTOFF_ANGSTROM+1)],
         use_edge_updates=False,
+        num_passes=6,
         hard_cutoff=CUTOFF_ANGSTROM)
 
     return model
 
 def train_model(args, logs_path):
-    densityloader = VaspChargeDataLoader("vaspchgcar.tar.gz", CUTOFF_ANGSTROM)
+    densityloader = VaspChargeDataLoader("vasprelaxed.tar.gz", CUTOFF_ANGSTROM)
     graph_obj_list = densityloader.load()
 
     data_handler = DensityDataHandler(graph_obj_list)
@@ -165,10 +166,10 @@ def train_model(args, logs_path):
 def plot_prediction(model_file):
     from mayavi import mlab
     model = get_model()
-    densityloader = VaspChargeDataLoader("vaspchgcar.zip", CUTOFF_ANGSTROM)
+    densityloader = VaspChargeDataLoader("vasprelaxed.tar.gz", CUTOFF_ANGSTROM)
     graph_obj_list = densityloader.load()
 
-    data_handler = msgnet.datahandler.EdgeSelectDataHandler(graph_obj_list, ["density"], [0])
+    data_handler = DensityDataHandler([graph_obj_list[0]])
 
     with tf.Session() as sess:
         sess.run(tf.global_variables_initializer())
@@ -177,19 +178,19 @@ def plot_prediction(model_file):
 
         density = []
         target_density = []
-        for input_data in data_handler.get_test_batches(10):
+        for input_data in data_handler.get_test_batches(100):
             feed_dict = {}
             for key, val in model.get_input_symbols().items():
                 feed_dict[val] = input_data[key]
             test_pred, = sess.run([model.get_graph_out()], feed_dict=feed_dict)
             density.append(test_pred)
-            target_density.append(input_data["graph_targets"])
+            target_density.append(input_data["probes_target"])
 
         pred_density = np.concatenate(density)
         target_density = np.concatenate(target_density)
 
-    pred_density = pred_density.reshape(densityloader.grid_pos.shape[0:3])
-    target_density = target_density.reshape(densityloader.grid_pos.shape[0:3])
+    pred_density = pred_density.reshape(data_handler.graph_objects[0].grid_position.shape[0:3])
+    target_density = target_density.reshape(data_handler.graph_objects[0].grid_position.shape[0:3])
 
     errors = target_density-pred_density
     rmse = np.sqrt(np.mean(np.square(errors)))
@@ -197,13 +198,18 @@ def plot_prediction(model_file):
 
     print("mae=%f, rmse=%f" % (mae, rmse))
 
-    x = densityloader.grid_pos[:,:,:,0]
-    y = densityloader.grid_pos[:,:,:,1]
-    z = densityloader.grid_pos[:,:,:,2]
+    x = data_handler.graph_objects[0].grid_position[:,:,:,0]
+    y = data_handler.graph_objects[0].grid_position[:,:,:,1]
+    z = data_handler.graph_objects[0].grid_position[:,:,:,2]
 
     mlab.contour3d(x,y,z,pred_density)
     mlab.contour3d(x,y,z,target_density)
     mlab.contour3d(x,y,z,errors)
+
+    x = data_handler.graph_objects[0].atoms.get_positions()[:,0]
+    y = data_handler.graph_objects[0].atoms.get_positions()[:,1]
+    z = data_handler.graph_objects[0].atoms.get_positions()[:,2]
+    mlab.points3d(x,y,z)
 
     mlab.show()
 
