@@ -4,6 +4,7 @@ import itertools
 import ase
 import warnings
 import tarfile
+import os
 from ase.neighborlist import NeighborList
 from ase.calculators.vasp import VaspChargeDensity
 import msgnet
@@ -117,11 +118,22 @@ class FeatureGraphVirtual():
 class VaspChargeDataLoader(msgnet.dataloader.DataLoader):
     def __init__(self, vasp_fname, cutoff_radius):
         super().__init__()
+        self.basename = os.path.basename(vasp_fname)
         self.download_dest = vasp_fname
         self.cutoff_radius = cutoff_radius
 
     def _download_data(self):
         pass
+
+    @property
+    def final_dest(self):
+        cutname = "%s-%.2f" % (self.cutoff_type, self.cutoff_radius)
+        return "/%s/%s_%s_%s.pkz" % (
+            msgnet.defaults.datadir,
+            self.__class__.__name__,
+            self.basename,
+            cutname,
+        )
 
     def _preprocess(self):
         with tarfile.open(self.download_dest, "r:*") as tar:
