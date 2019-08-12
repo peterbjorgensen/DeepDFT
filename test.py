@@ -21,6 +21,7 @@ def get_arguments(arg_list=None):
         description="Train graph convolution network", fromfile_prefix_chars="@"
     )
     parser.add_argument("--load_model", type=str, default=None)
+    parser.add_argument("--dataset", type=str, default=None)
     parser.add_argument("--plot_density", type=str, default=None)
     parser.add_argument("--learning_rate", type=float, default=1e-4)
 
@@ -55,7 +56,9 @@ def get_model():
     return model
 
 def train_model(args, logs_path):
-    densityloader = VaspChargeDataLoader("vasprelaxed.tar.gz", CUTOFF_ANGSTROM)
+    basename = os.path.basename(args.dataset)
+    logs_path = logs_path + "/%s/" % (basename)
+    densityloader = VaspChargeDataLoader(args.dataset, CUTOFF_ANGSTROM)
     graph_obj_list = densityloader.load()
 
     data_handler = DensityDataHandler(graph_obj_list)
