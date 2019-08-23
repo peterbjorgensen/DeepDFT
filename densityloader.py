@@ -143,8 +143,8 @@ class VaspChargeDataLoader(msgnet.dataloader.DataLoader):
                 tmppath = "/tmp/extracted%d" % os.getpid()
                 with open(tmppath, "wb") as tmpfile:
                     tmpfile.write(buf.read())
-                os.remove(tmppath)
                 vasp_charge = VaspChargeDensity(filename=tmppath)
+                os.remove(tmppath)
                 density = vasp_charge.chg[-1] #seperate density
                 atoms = vasp_charge.atoms[-1] #seperate atom positions
                 probe_pos = np.array([0.5, 0.5, 0.5]).dot(atoms.get_cell())
