@@ -1,4 +1,5 @@
 import numpy as np
+import os
 import multiprocessing
 import itertools
 import ase
@@ -139,9 +140,10 @@ class VaspChargeDataLoader(msgnet.dataloader.DataLoader):
         with tarfile.open(self.download_dest, "r:*") as tar:
             for i, tarinfo in enumerate(tar.getmembers()):
                 buf = tar.extractfile(tarinfo)
-                tmppath = "/tmp/extracted"
+                tmppath = "/tmp/extracted%d" % os.getpid()
                 with open(tmppath, "wb") as tmpfile:
                     tmpfile.write(buf.read())
+                os.remove(tmppath)
                 vasp_charge = VaspChargeDensity(filename=tmppath)
                 density = vasp_charge.chg[-1] #seperate density
                 atoms = vasp_charge.atoms[-1] #seperate atom positions
