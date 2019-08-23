@@ -152,7 +152,7 @@ def train_model(args, logs_path):
                             best_val_mae,
                             best_val_step,
                         )
-                    if (update_step - best_val_step) > 1e6:
+                    if (update_step - best_val_step) > 100e6:
                         logging.info(
                             "best_val_mae=%f, best_val_step=%d",
                             best_val_mae,
