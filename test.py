@@ -62,7 +62,7 @@ def train_model(args, logs_path):
     graph_obj_list = densityloader.load()
 
     data_handler = DensityDataHandler(graph_obj_list)
-    train_handler, _, validation_handler = data_handler.train_test_split(split_type="count", validation_size=3, test_size=0)
+    train_handler, _, validation_handler = data_handler.train_test_split(split_type="count", validation_size=100, test_size=0)
 
     batch_size = 1
 
@@ -70,9 +70,9 @@ def train_model(args, logs_path):
 
     trainer = DensityOutputTrainer(model, train_handler, batch_size=batch_size, initial_lr=args.learning_rate)
 
-    num_steps = int(1e6)
+    num_steps = int(1e7)
     start_step = 0
-    log_interval = 1000
+    log_interval = 10000
 
     best_val_mae = np.inf
     best_val_step = 0
@@ -113,12 +113,12 @@ def train_model(args, logs_path):
 
                 # Evaluate training set
                 train_metrics = trainer.evaluate_metrics(
-                    sess, train_handler, prefix="train", decimation=100000
+                    sess, train_handler, prefix="train", decimation=1000
                 )
 
                 # Evaluate validation set
                 if validation_handler:
-                    val_metrics = trainer.evaluate_metrics(sess, validation_handler, prefix="val", decimation=1000)
+                    val_metrics = trainer.evaluate_metrics(sess, validation_handler, prefix="val", decimation=100)
                 else:
                     val_metrics = {}
 
