@@ -56,8 +56,6 @@ def get_model():
     return model
 
 def train_model(args, logs_path):
-    basename = os.path.basename(args.dataset)
-    logs_path = logs_path + "/%s/" % (basename)
     densityloader = VaspChargeDataLoader(args.dataset, CUTOFF_ANGSTROM)
     graph_obj_list = densityloader.load()
 
@@ -217,6 +215,13 @@ def plot_prediction(model_file):
     mlab.show()
 
 def main(_):
+    args = get_arguments()
+    try:
+        basename = os.path.basename(args.dataset)
+    except:
+        basename = "."
+
+    logs_path = logs_path + "/%s/" % (basename)
     logs_path = "logs/"
     os.makedirs(logs_path, exist_ok=True)
     logging.basicConfig(
@@ -227,8 +232,7 @@ def main(_):
             logging.StreamHandler(),
         ],
     )
-    logging.debug("ping")
-    args = get_arguments()
+    logging.debug("logging to %s" % logs_path)
     if args.plot_density:
         plot_prediction(args.plot_density)
     else:
