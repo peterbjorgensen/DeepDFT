@@ -221,8 +221,7 @@ def main(_):
     except:
         basename = "."
 
-    logs_path = logs_path + "/%s/" % (basename)
-    logs_path = "logs/"
+    logs_path = "logs/%s/" % (basename)
     os.makedirs(logs_path, exist_ok=True)
     logging.basicConfig(
         level=logging.DEBUG,
