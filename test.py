@@ -9,7 +9,7 @@ import msgnet
 import tensorflow as tf
 import numpy as np
 import densitymsg
-from densityloader import VaspChargeDataLoader
+from densityloader import ChargeDataLoader
 from densityhandler import DensityDataHandler
 from trainer import DensityOutputTrainer
 from ase.neighborlist import NeighborList
@@ -56,7 +56,7 @@ def get_model():
     return model
 
 def train_model(args, logs_path):
-    densityloader = VaspChargeDataLoader(args.dataset, CUTOFF_ANGSTROM)
+    densityloader = ChargeDataLoader(args.dataset, CUTOFF_ANGSTROM)
     graph_obj_list = densityloader.load()
 
     data_handler = DensityDataHandler(graph_obj_list)
@@ -167,7 +167,7 @@ def train_model(args, logs_path):
 def plot_prediction(model_file):
     from mayavi import mlab
     model = get_model()
-    densityloader = VaspChargeDataLoader("vasprelaxed.tar.gz", CUTOFF_ANGSTROM)
+    densityloader = ChargeDataLoader("vasprelaxed.tar.gz", CUTOFF_ANGSTROM)
     graph_obj_list = densityloader.load()
 
     data_handler = DensityDataHandler([graph_obj_list[0]])
