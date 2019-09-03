@@ -8,6 +8,7 @@ import tarfile
 import os
 from ase.neighborlist import NeighborList
 from ase.calculators.vasp import VaspChargeDensity
+import ase.io.cube
 import msgnet
 
 class FeatureGraphVirtual():
@@ -116,7 +117,7 @@ class FeatureGraphVirtual():
             np.array(probe_connections_offset),
         )
 
-class VaspChargeDataLoader(msgnet.dataloader.DataLoader):
+class ChargeDataLoader(msgnet.dataloader.DataLoader):
     def __init__(self, vasp_fname, cutoff_radius):
         super().__init__()
         self.basename = os.path.basename(vasp_fname)
@@ -136,17 +137,29 @@ class VaspChargeDataLoader(msgnet.dataloader.DataLoader):
             cutname,
         )
 
+    def _extract_vasp(tarinfo):
+        buf = tar.extractfile(tarinfo)
+        tmppath = "/tmp/extracted%d" % os.getpid()
+        with open(tmppath, "wb") as tmpfile:
+            tmpfile.write(buf.read())
+        vasp_charge = VaspChargeDensity(filename=tmppath)
+        os.remove(tmppath)
+        density = vasp_charge.chg[-1] #seperate density
+        atoms = vasp_charge.atoms[-1] #seperate atom positions
+        return density, atoms
+
+    def _extract_cube(tarinfo):
+        buf = tar.extractfile(tarinfo)
+        density, atoms = ase.io.cube.read_cube_data(buf)
+        return density, atoms
+
     def _preprocess(self):
         with tarfile.open(self.download_dest, "r:*") as tar:
             for i, tarinfo in enumerate(tar.getmembers()):
-                buf = tar.extractfile(tarinfo)
-                tmppath = "/tmp/extracted%d" % os.getpid()
-                with open(tmppath, "wb") as tmpfile:
-                    tmpfile.write(buf.read())
-                vasp_charge = VaspChargeDensity(filename=tmppath)
-                os.remove(tmppath)
-                density = vasp_charge.chg[-1] #seperate density
-                atoms = vasp_charge.atoms[-1] #seperate atom positions
+                if tarinfo.name.endswith(".cube"):
+                    density, atoms = self._extract_cube(tarinfo)
+                else:
+                    density, atoms = self._extract_vasp(tarinfo)
                 probe_pos = np.array([0.5, 0.5, 0.5]).dot(atoms.get_cell())
                 probe_atom = ase.atom.Atom(0, probe_pos)
                 atoms.append(probe_atom)
