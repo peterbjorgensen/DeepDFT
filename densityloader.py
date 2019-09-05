@@ -1,3 +1,4 @@
+import io
 import numpy as np
 import os
 import multiprocessing
@@ -149,8 +150,8 @@ class ChargeDataLoader(msgnet.dataloader.DataLoader):
         return density, atoms
 
     def _extract_cube(self, tar, tarinfo):
-        buf = tar.extractfile(tarinfo)
-        density, atoms = ase.io.cube.read_cube_data(buf)
+        textbuf = io.TextIOWrapper(tar.extractfile(tarinfo))
+        density, atoms = ase.io.cube.read_cube_data(textbuf)
         return density, atoms
 
     def _preprocess(self):
