@@ -137,7 +137,7 @@ class ChargeDataLoader(msgnet.dataloader.DataLoader):
             cutname,
         )
 
-    def _extract_vasp(tarinfo):
+    def _extract_vasp(self, tarinfo):
         buf = tar.extractfile(tarinfo)
         tmppath = "/tmp/extracted%d" % os.getpid()
         with open(tmppath, "wb") as tmpfile:
@@ -148,7 +148,7 @@ class ChargeDataLoader(msgnet.dataloader.DataLoader):
         atoms = vasp_charge.atoms[-1] #seperate atom positions
         return density, atoms
 
-    def _extract_cube(tarinfo):
+    def _extract_cube(self, tarinfo):
         buf = tar.extractfile(tarinfo)
         density, atoms = ase.io.cube.read_cube_data(buf)
         return density, atoms
