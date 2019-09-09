@@ -7,6 +7,7 @@ import ase
 import warnings
 import tarfile
 import os
+import pickle
 from ase.neighborlist import NeighborList
 from ase.calculators.vasp import VaspChargeDensity
 import ase.io.cube
@@ -118,6 +119,18 @@ class FeatureGraphVirtual():
             np.array(probe_connections_offset),
         )
 
+class CompressedDataEntry():
+    def __init__(self, tar, tarinfo, tar_semaphore):
+        self.source_tar = tar
+        self.tarinfo = tarinfo
+        self.tar_semaphore = tar_semaphore
+
+    def decompress(self):
+        with self.tar_semaphore:
+            buf = self.source_tar.extractfile(self.tarinfo)
+            obj = pickle.load(buf)
+        return obj
+
 class ChargeDataLoader(msgnet.dataloader.DataLoader):
     def __init__(self, vasp_fname, cutoff_radius):
         super().__init__()
@@ -153,6 +166,14 @@ class ChargeDataLoader(msgnet.dataloader.DataLoader):
         textbuf = io.TextIOWrapper(tar.extractfile(tarinfo))
         density, atoms = ase.io.cube.read_cube_data(textbuf)
         return density, atoms
+
+    def _load_data(self):
+        obj_list = []
+        tar = tarfile.open(self.final_dest, "r:gz")
+        tar_semaphore = multiprocessing.BoundedSemaphore()
+        for tarinfo in tar.getmembers():
+            obj_list.append(CompressedDataEntry(tar, tarinfo, tar_semaphore))
+        return obj_list
 
     def _preprocess(self):
         with tarfile.open(self.download_dest, "r:*") as tar:

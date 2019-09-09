@@ -1,19 +1,35 @@
+import multiprocessing
+import queue
 import itertools
 import math
 import numpy as np
 import msgnet
 
+def train_queue_worker(index_generator, compressed_objects, queue):
+    for idx in index_generator:
+        queue.put(compressed_objects[idx].decompress())
+
 class DensityDataHandler(msgnet.datahandler.DataHandler):
-    def __init__(self, graph_objects):
+    def __init__(self, graph_objects, preprocessing_size=10):
         self.graph_objects = graph_objects
         self.train_index_generator = self.idx_epoch_gen(len(graph_objects))
+        self.train_queue = multiprocessing.Queue(preprocessing_size)
+        self.train_worker = multiprocessing.Process(
+            target=train_queue_worker,
+            args=(self.train_index_generator, self.graph_objects, self.train_queue)
+            )
+        self.train_worker.start()
 
     def from_self(self, objects):
         return self.__class__(objects)
 
     def get_train_batch(self, batch_size, probe_count=100):
-        graph_choice = itertools.islice(self.train_index_generator, batch_size)
-        graph_objects = [self.graph_objects[idx] for idx in graph_choice]
+        graph_objects = [self.train_queue.get() for i in range(batch_size)]
+        try:
+            for g in graph_objects:
+                self.train_queue.put(g, block=False)
+        except queue.Full:
+            pass
         probe_choice_max = [np.prod(gobj.grid_position.shape[0:3]) for gobj in graph_objects]
         probe_choice = [np.random.randint(probe_max, size=probe_count) for probe_max in probe_choice_max]
         probe_choice = [np.unravel_index(pchoice, gobj.grid_position.shape[0:3]) for pchoice, gobj in zip(probe_choice, graph_objects)]
@@ -25,7 +41,8 @@ class DensityDataHandler(msgnet.datahandler.DataHandler):
 
     def get_test_batches(self, probe_count=100, decimation=1):
         global_slice_index = 0
-        for gobj in self.graph_objects:
+        for cobj in self.graph_objects:
+            gobj = cobj.decompress()
             num_positions = np.prod(gobj.grid_position.shape[0:3])
             num_slices = int(math.ceil(num_positions / probe_count))
             for slice_index in range(num_slices):
