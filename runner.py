@@ -24,6 +24,7 @@ def get_arguments(arg_list=None):
     parser.add_argument("--dataset", type=str, default=None)
     parser.add_argument("--plot_density", type=str, default=None)
     parser.add_argument("--learning_rate", type=float, default=1e-4)
+    parser.add_argument("--use_train_queue", action="store_true")
 
     return parser.parse_args(arg_list)
 
@@ -60,7 +61,16 @@ def train_model(args, logs_path):
     graph_obj_list = densityloader.load()
 
     data_handler = DensityDataHandler(graph_obj_list)
-    train_handler, _, validation_handler = data_handler.train_test_split(split_type="count", validation_size=50, test_size=0)
+    train_handler, _, validation_handler = data_handler.train_test_split(split_type="count", validation_size=10, test_size=0)
+
+    if args.use_train_queue:
+        train_handler.setup_train_queue()
+        num_samples_train_metric = 10
+        train_metrics_handler = DensityDataHandler([train_handler.graph_objects[i].decompress() for i in np.random.permutation(len(train_handler))[0:num_samples_train_metric]])
+        validation_handler.graph_objects = [g.decompress() for g in validation_handler.graph_objects]
+    else:
+        train_metrics_handler = train_handler
+
 
     batch_size = 1
 
@@ -111,7 +121,7 @@ def train_model(args, logs_path):
 
                 # Evaluate training set
                 train_metrics = trainer.evaluate_metrics(
-                    sess, train_handler, prefix="train", decimation=1000
+                    sess, train_metrics_handler, prefix="train", decimation=1000
                 )
 
                 # Evaluate validation set
