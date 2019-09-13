@@ -123,12 +123,12 @@ def train_model(args, logs_path):
 
                 # Evaluate training set
                 train_metrics = trainer.evaluate_metrics(
-                    sess, train_metrics_handler, prefix="train", decimation=1000
+                    sess, train_metrics_handler, prefix="train", decimation=100
                 )
 
                 # Evaluate validation set
                 if validation_handler:
-                    val_metrics = trainer.evaluate_metrics(sess, validation_handler, prefix="val", decimation=100)
+                    val_metrics = trainer.evaluate_metrics(sess, validation_handler, prefix="val", decimation=10)
                 else:
                     val_metrics = {}
 
