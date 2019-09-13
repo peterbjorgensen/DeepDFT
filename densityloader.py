@@ -1,4 +1,5 @@
 import io
+import zlib
 import numpy as np
 import os
 import multiprocessing
@@ -120,15 +121,15 @@ class FeatureGraphVirtual():
         )
 
 class CompressedDataEntry():
-    def __init__(self, tar, tarinfo, tar_semaphore):
-        self.source_tar = tar
-        self.tarinfo = tarinfo
-        self.tar_semaphore = tar_semaphore
+    def __init__(self, tarpath, member):
+        self.source_tar = tarpath
+        self.member = member
 
     def decompress(self):
-        with self.tar_semaphore:
-            buf = self.source_tar.extractfile(self.tarinfo)
-            obj = pickle.load(buf)
+        with tarfile.open(self.source_tar, "r") as tar:
+            buf = tar.extractfile(self.member).read()
+            decompbytes = zlib.decompress(buf)
+            obj = pickle.loads(decompbytes)
         return obj
 
 class ChargeDataLoader(msgnet.dataloader.DataLoader):
@@ -169,14 +170,13 @@ class ChargeDataLoader(msgnet.dataloader.DataLoader):
 
     def _load_data(self):
         obj_list = []
-        tar = tarfile.open(self.final_dest, "r:gz")
-        tar_semaphore = multiprocessing.BoundedSemaphore()
-        for tarinfo in tar.getmembers():
-            obj_list.append(CompressedDataEntry(tar, tarinfo, tar_semaphore))
+        with tarfile.open(self.final_dest, "r") as tar:
+            for member in tar.getmembers():
+                obj_list.append(CompressedDataEntry(self.final_dest, member))
         return obj_list
 
     def _preprocess(self):
-        with tarfile.open(self.download_dest, "r:*") as tar:
+        with tarfile.open(self.download_dest, "r") as tar:
             for i, tarinfo in enumerate(tar.getmembers()):
                 if tarinfo.name.endswith(".cube"):
                     density, atoms = self._extract_cube(tar, tarinfo)

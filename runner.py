@@ -226,7 +226,7 @@ def plot_prediction(model_file):
 
     mlab.show()
 
-def main(_):
+def main():
     args = get_arguments()
     try:
         basename = os.path.basename(args.dataset)
@@ -250,4 +250,4 @@ def main(_):
         train_model(args, logs_path)
 
 if __name__ == "__main__":
-    tf.app.run()
+    main()
