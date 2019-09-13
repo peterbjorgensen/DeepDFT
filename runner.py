@@ -70,6 +70,8 @@ def train_model(args, logs_path):
         validation_handler.graph_objects = [g.decompress() for g in validation_handler.graph_objects]
     else:
         train_metrics_handler = train_handler
+        validation_handler.graph_objects = [g.decompress() for g in validation_handler.graph_objects]
+        train_handler.graph_objects = [g.decompress() for g in train_handler.graph_objects]
 
 
     batch_size = 1
