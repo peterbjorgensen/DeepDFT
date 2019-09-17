@@ -197,7 +197,14 @@ class ChargeDataLoader(msgnet.dataloader.DataLoader):
                 grid_pos = np.stack(grid_pos, 3)
                 grid_pos = np.dot(grid_pos, atoms.get_cell())
 
-                graphobj = FeatureGraphVirtual(atoms, "const", self.cutoff_radius, lambda x: x, density=density, grid_position=grid_pos)
+                graphobj = FeatureGraphVirtual(
+                    atoms, "const",
+                    self.cutoff_radius,
+                    lambda x: x,
+                    density=density,
+                    grid_position=grid_pos,
+                    filename=tarinfo.name
+                    )
                 yield graphobj
                 if i % 100 == 0:
                     print("%010d    " % i, sep="", end="\r")
