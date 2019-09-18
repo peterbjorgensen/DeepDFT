@@ -31,7 +31,7 @@ def main():
                         feed_dict[val] = input_data[key]
                     test_pred, = sess.run([model.get_graph_out()], feed_dict=feed_dict)
                     density.append(test_pred.squeeze(0))
-                    target_density.append(input_data["probes_target"])
+                    target_density.append(input_data["probes_target"].squeeze(0))
 
                 pred_density = np.concatenate(density)
                 target_density = np.concatenate(target_density)
