@@ -15,7 +15,8 @@ def main():
     data_splits = {"train": train_handler, "test": test_handler, "validation": validation_handler}
 
     for key,datahandler in data_splits.items():
-        for gobj in datahandler.graph_objects:
+        for cobj in datahandler.graph_objects:
+            gobj = cobj.decompress()
             data_handler = DensityDataHandler([gobj])
 
             with tf.Session() as sess:
