@@ -75,8 +75,8 @@ def main():
                     density.append(test_pred.squeeze(0))
                     target_density.append(input_data["probes_target"].squeeze(0))
 
-                    pred_density = np.concatenate(density)
-                    target_density = np.concatenate(target_density)
+                pred_density = np.concatenate(density)
+                target_density = np.concatenate(target_density)
 
                 pred_density = pred_density.reshape(data_handler.graph_objects[0].grid_position.shape[0:3])
                 target_density = target_density.reshape(data_handler.graph_objects[0].grid_position.shape[0:3])
