@@ -6,6 +6,8 @@ import io
 import tensorflow as tf
 import numpy as np
 import ase
+import ase.units
+import time
 from densityloader import ChargeDataLoader
 from densityhandler import DensityDataHandler
 from runner import get_model, CUTOFF_ANGSTROM
@@ -55,17 +57,17 @@ def write_cube(fileobj, atoms, data=None, origin=None, comment=None):
     if origin is None:
         origin = np.zeros(3)
     else:
-        origin = np.asarray(origin) / Bohr
+        origin = np.asarray(origin) / ase.units.Bohr
 
     fileobj.write('{0:5}{1:12.6f}{2:12.6f}{3:12.6f}\n'
                   .format(len(atoms), *origin))
 
     for i in range(3):
         n = data.shape[i]
-        d = atoms.cell[i] / n / Bohr
+        d = atoms.cell[i] / n / ase.units.Bohr
         fileobj.write('{0:5}{1:12.6f}{2:12.6f}{3:12.6f}\n'.format(n, *d))
 
-    positions = atoms.positions / Bohr
+    positions = atoms.positions / ase.units.Bohr
     numbers = atoms.numbers
     for Z, (x, y, z) in zip(numbers, positions):
         fileobj.write('{0:5}{1:12.6f}{2:12.6f}{3:12.6f}{4:12.6f}\n'
