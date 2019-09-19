@@ -21,13 +21,13 @@ def get_arguments(arg_list=None):
     return parser.parse_args(arg_list)
 
 def write_cube_to_tar(tar, atoms, cubedata, filename):
-    cbuf = io.BytesIO()
+    cbuf = io.StringIO()
     ase.io.cube.write_cube(
         cbuf,
         atoms,
         data=cubedata,
         origin=(0,0,0),
-        comment=filename.encode(),
+        comment=filename,
     )
     cbuf.seek(0)
     cbytes = zlib.compress(cbuf)
