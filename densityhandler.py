@@ -58,6 +58,7 @@ class DensityDataHandler(msgnet.datahandler.DataHandler):
             num_positions = np.prod(gobj.grid_position.shape[0:3])
             num_slices = int(math.ceil(num_positions / probe_count))
             for slice_index in range(num_slices):
+                global_slice_index += 1
                 if (global_slice_index % decimation) != 0:
                     continue
                 flat_index = np.arange(slice_index*probe_count, min((slice_index+1)*probe_count, num_positions))
@@ -68,7 +69,6 @@ class DensityDataHandler(msgnet.datahandler.DataHandler):
 
                 self.modify_dict(test_dict)
                 yield test_dict
-                global_slice_index += 1
 
     @staticmethod
     def list_to_matrices(graph_list, probe_pos_list, probe_target_list=None):
