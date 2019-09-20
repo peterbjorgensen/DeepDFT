@@ -61,7 +61,7 @@ def train_model(args, logs_path):
     graph_obj_list = densityloader.load()
 
     data_handler = DensityDataHandler(graph_obj_list)
-    train_handler, _, validation_handler = data_handler.train_test_split(split_type="count", validation_size=10, test_size=0)
+    train_handler, _, validation_handler = data_handler.train_test_split(split_type="count", validation_size=10, test_size=10)
 
     if args.use_train_queue:
         train_handler.setup_train_queue()
