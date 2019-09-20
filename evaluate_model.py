@@ -87,7 +87,8 @@ def write_cube_to_tar(tar, atoms, cubedata, filename):
         comment=filename,
     )
     cbuf.seek(0)
-    cbytes = zlib.compress(cbuf)
+    cube_bytes = cbuf.getvalue().encode()
+    cbytes = zlib.compress(cube_bytes)
     fsize = len(cbytes)
     cbuf = io.BytesIO(cbytes)
     cbuf.seek(0)
