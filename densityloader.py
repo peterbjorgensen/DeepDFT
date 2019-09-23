@@ -170,7 +170,7 @@ class ChargeDataLoader(msgnet.dataloader.DataLoader):
 
     def _load_data(self):
         obj_list = []
-        with tarfile.open(self.final_dest, "r") as tar:
+        with tarfile.open(self.final_dest, "r:") as tar:
             for member in tar.getmembers():
                 obj_list.append(CompressedDataEntry(self.final_dest, member))
         return obj_list
