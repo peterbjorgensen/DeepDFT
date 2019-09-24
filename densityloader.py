@@ -54,11 +54,11 @@ class FeatureGraphVirtual():
         cutoff_covalent=False,
     ):
 
+        unitcell = atoms.get_cell()
         if np.any(atoms.get_pbc()):
             atoms.wrap()
 
             # Find the longest diagonal
-            unitcell = atoms.get_cell()
             max_dist_squared = 0
             for a, b, c in itertools.product([-1,1], repeat=3):
                 vec = a*unitcell[0] + b*unitcell[1] + c*unitcell[2]
@@ -66,8 +66,10 @@ class FeatureGraphVirtual():
                 max_dist_squared = max(max_dist_squared, dist_squared)
 
             max_dist = np.sqrt(max_dist_squared)
+            primitiveclass = ase.neighborlist.NewPrimitiveNeighborList
         else:
             max_dist = 1000. # Practically infinite
+            primitiveclass = ase.neighborlist.PrimitiveNeighborList
 
         atom_numbers = atoms.get_atomic_numbers()
         if cutoff_covalent:
@@ -80,7 +82,7 @@ class FeatureGraphVirtual():
                 else:
                     radii.append(cutoff)
         neighborhood = NeighborList(
-            radii, skin=0.0, self_interaction=self_interaction, bothways=True, primitive=ase.neighborlist.NewPrimitiveNeighborList
+            radii, skin=0.0, self_interaction=self_interaction, bothways=True, primitive=primitiveclass
         )
         neighborhood.update(atoms)
 
