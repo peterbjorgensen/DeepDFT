@@ -56,7 +56,6 @@ class FeatureGraphVirtual():
 
         if np.any(atoms.get_pbc()):
             atoms.wrap()
-            atom_numbers = atoms.get_atomic_numbers()
 
             # Find the longest diagonal
             unitcell = atoms.get_cell()
@@ -70,6 +69,7 @@ class FeatureGraphVirtual():
         else:
             max_dist = 1000. # Practically infinite
 
+        atom_numbers = atoms.get_atomic_numbers()
         if cutoff_covalent:
             raise NotImplementedError()
         else:
