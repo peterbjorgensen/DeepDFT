@@ -54,21 +54,24 @@ class FeatureGraphVirtual():
         cutoff_covalent=False,
     ):
 
-        atoms.wrap()
-        atom_numbers = atoms.get_atomic_numbers()
+        if np.any(atoms.get_pbc()):
+            atoms.wrap()
+            atom_numbers = atoms.get_atomic_numbers()
 
-        # Find the longest diagonal
-        unitcell = atoms.get_cell()
-        max_dist_squared = 0
-        for a, b, c in itertools.product([-1,1], repeat=3):
-            vec = a*unitcell[0] + b*unitcell[1] + c*unitcell[2]
-            dist_squared = vec.dot(vec)
-            max_dist_squared = max(max_dist_squared, dist_squared)
+            # Find the longest diagonal
+            unitcell = atoms.get_cell()
+            max_dist_squared = 0
+            for a, b, c in itertools.product([-1,1], repeat=3):
+                vec = a*unitcell[0] + b*unitcell[1] + c*unitcell[2]
+                dist_squared = vec.dot(vec)
+                max_dist_squared = max(max_dist_squared, dist_squared)
 
-        max_dist = np.sqrt(max_dist_squared)
+            max_dist = np.sqrt(max_dist_squared)
+        else:
+            max_dist = 1000. # Practically infinite
 
         if cutoff_covalent:
-            radii = ase.data.covalent_radii[atom_numbers] * cutoff
+            raise NotImplementedError()
         else:
             radii = []
             for at_num in atom_numbers:
