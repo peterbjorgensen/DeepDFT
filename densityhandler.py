@@ -21,9 +21,16 @@ class DensityDataHandler(msgnet.datahandler.DataHandler):
 
     def setup_train_queue(self):
         self.train_queue = multiprocessing.Queue(self.preprocessing_size)
+        pargs = (
+            self.train_index_generator,
+            self.graph_objects,
+            self.train_queue,
+            self.preprocessing_batch_size,
+            self.preprocessing_probe_count,
+            )
         self.train_worker = multiprocessing.Process(
             target=train_queue_worker,
-            args=(self.train_index_generator, self.graph_objects, self.train_queue, self.preprocessing_batch_size)
+            args=pargs,
             )
         self.train_worker.start()
 
