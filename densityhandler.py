@@ -1,4 +1,5 @@
 import multiprocessing
+import threading
 import queue
 import itertools
 import math
@@ -10,6 +11,10 @@ def train_queue_worker(index_generator, compressed_objects, queue, batch_size, p
         training_dict = DensityDataHandler.sample_objects(index_generator, batch_size, probe_count, compressed_objects)
         queue.put(training_dict)
 
+def thread_handover(mp_queue, thread_queue):
+    while True:
+        thread_queue.put(mp_queue.get())
+
 class DensityDataHandler(msgnet.datahandler.DataHandler):
     def __init__(self, graph_objects, preprocessing_size=10, preprocessing_batch_size=1, preprocessing_probe_count=100):
         self.preprocessing_size = preprocessing_size
@@ -20,11 +25,12 @@ class DensityDataHandler(msgnet.datahandler.DataHandler):
         self.train_index_generator = self.idx_epoch_gen(len(self.graph_objects))
 
     def setup_train_queue(self):
-        self.train_queue = multiprocessing.Queue(self.preprocessing_size)
+        self.mp_train_queue = multiprocessing.Queue(self.preprocessing_size)
+        self.train_queue = queue.Queue(self.preprocessing_size)
         pargs = (
             self.train_index_generator,
             self.graph_objects,
-            self.train_queue,
+            self.mp_train_queue,
             self.preprocessing_batch_size,
             self.preprocessing_probe_count,
             )
@@ -32,6 +38,11 @@ class DensityDataHandler(msgnet.datahandler.DataHandler):
             target=train_queue_worker,
             args=pargs,
             )
+        self.thread_worker = threading.Thread(
+            target=thread_handover,
+            args=(self.mp_train_queue, self.train_queue),
+        )
+        self.thread_worker.start()
         self.train_worker.start()
 
     def from_self(self, objects):
