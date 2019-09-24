@@ -5,13 +5,16 @@ import math
 import numpy as np
 import msgnet
 
-def train_queue_worker(index_generator, compressed_objects, queue):
-    for idx in index_generator:
-        queue.put(compressed_objects[idx].decompress())
+def train_queue_worker(index_generator, compressed_objects, queue, batch_size, probe_count):
+    while True:
+        training_dict = DensityDataHandler.sample_objects(index_generator, batch_size, probe_count, compressed_objects)
+        queue.put(training_dict)
 
 class DensityDataHandler(msgnet.datahandler.DataHandler):
-    def __init__(self, graph_objects, preprocessing_size=10):
-        self.preprocessing_size=preprocessing_size
+    def __init__(self, graph_objects, preprocessing_size=10, preprocessing_batch_size=1, preprocessing_probe_count=100):
+        self.preprocessing_size = preprocessing_size
+        self.preprocessing_batch_size = preprocessing_batch_size
+        self.preprocessing_probe_count = preprocessing_probe_count
         self.graph_objects = graph_objects
         self.train_queue = None
         self.train_index_generator = self.idx_epoch_gen(len(self.graph_objects))
@@ -20,7 +23,7 @@ class DensityDataHandler(msgnet.datahandler.DataHandler):
         self.train_queue = multiprocessing.Queue(self.preprocessing_size)
         self.train_worker = multiprocessing.Process(
             target=train_queue_worker,
-            args=(self.train_index_generator, self.graph_objects, self.train_queue)
+            args=(self.train_index_generator, self.graph_objects, self.train_queue, self.preprocessing_batch_size)
             )
         self.train_worker.start()
 
@@ -29,23 +32,30 @@ class DensityDataHandler(msgnet.datahandler.DataHandler):
 
     def get_train_batch(self, batch_size, probe_count=100):
         if self.train_queue is not None:
-            graph_objects = [self.train_queue.get() for i in range(batch_size)]
+            assert self.preprocessing_batch_size == batch_size, "Train batch size is fixed when using train queue"
+            assert self.preprocessing_probe_count == probe_count, "Probe count is fixed when using train queue"
+            training_dict = self.train_queue.get()
             try:
-                for g in graph_objects:
-                    self.train_queue.put(g, block=False)
+                self.train_queue.put(training_dict, block=False)
             except queue.Full:
                 pass
         else:
-            rand_choice = itertools.islice(self.train_index_generator, batch_size)
-            graph_objects = [self.graph_objects[idx] for idx in rand_choice]
-            graph_objects = list(map(lambda x: x.decompress() if hasattr(x, "decompress") else x, graph_objects))
+            training_dict = self.sample_objects(self.train_index_generator, batch_size, probe_count, self.graph_objects)
+        self.modify_dict(training_dict)
+        return training_dict
+
+    @staticmethod
+    def sample_objects(index_generator, batch_size, probe_count, graph_objects):
+        rand_choice = itertools.islice(index_generator, batch_size)
+        graph_objects = [graph_objects[idx] for idx in rand_choice]
+        graph_objects = list(map(lambda x: x.decompress() if hasattr(x, "decompress") else x, graph_objects))
+
         probe_choice_max = [np.prod(gobj.grid_position.shape[0:3]) for gobj in graph_objects]
         probe_choice = [np.random.randint(probe_max, size=probe_count) for probe_max in probe_choice_max]
         probe_choice = [np.unravel_index(pchoice, gobj.grid_position.shape[0:3]) for pchoice, gobj in zip(probe_choice, graph_objects)]
         probe_pos = [gobj.grid_position[pchoice] for pchoice, gobj in zip(probe_choice, graph_objects)]
         probe_target = [gobj.density[pchoice] for pchoice, gobj in zip(probe_choice, graph_objects)]
-        training_dict = self.list_to_matrices(graph_objects, probe_pos, probe_target)
-        self.modify_dict(training_dict)
+        training_dict = DensityDataHandler.list_to_matrices(graph_objects, probe_pos, probe_target)
         return training_dict
 
     def get_test_batches(self, probe_count=100, decimation=1):
