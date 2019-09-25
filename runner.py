@@ -176,18 +176,18 @@ def train_model(args, logs_path):
                 else:
                     model.save(sess, logs_path + "model.ckpt", global_step=update_step)
 
-def plot_prediction(model_file):
+def plot_prediction(args):
     from mayavi import mlab
     model = get_model()
-    densityloader = ChargeDataLoader("vasprelaxed.tar.gz", CUTOFF_ANGSTROM)
+    densityloader = ChargeDataLoader(args.dataset, CUTOFF_ANGSTROM)
     graph_obj_list = densityloader.load()
 
-    data_handler = DensityDataHandler([graph_obj_list[0]])
+    data_handler = DensityDataHandler([graph_obj_list[0].decompress()])
 
     with tf.Session() as sess:
         sess.run(tf.global_variables_initializer())
 
-        model.load(sess, model_file)
+        model.load(sess, args.plot_density)
 
         density = []
         target_density = []
@@ -196,8 +196,8 @@ def plot_prediction(model_file):
             for key, val in model.get_input_symbols().items():
                 feed_dict[val] = input_data[key]
             test_pred, = sess.run([model.get_graph_out()], feed_dict=feed_dict)
-            density.append(test_pred)
-            target_density.append(input_data["probes_target"])
+            density.append(test_pred.squeeze(0))
+            target_density.append(input_data["probes_target"].squeeze(0))
 
         pred_density = np.concatenate(density)
         target_density = np.concatenate(target_density)
@@ -245,7 +245,7 @@ def main():
     )
     logging.debug("logging to %s" % logs_path)
     if args.plot_density:
-        plot_prediction(args.plot_density)
+        plot_prediction(args)
     else:
         train_model(args, logs_path)
 
