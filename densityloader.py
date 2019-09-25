@@ -166,12 +166,15 @@ class ChargeDataLoader(msgnet.dataloader.DataLoader):
         os.remove(tmppath)
         density = vasp_charge.chg[-1] #seperate density
         atoms = vasp_charge.atoms[-1] #seperate atom positions
-        return density, atoms
+        return density, atoms, np.zeros(3) # TODO: Can we always assume origin at 0,0,0?
 
     def _extract_cube(self, tar, tarinfo):
         textbuf = io.TextIOWrapper(tar.extractfile(tarinfo))
-        density, atoms = ase.io.cube.read_cube_data(textbuf)
-        return density, atoms
+        cube = ase.io.cube.read_cube(textbuf)
+        # sometimes there is an entry at index 3
+        # denoting the number of values for each grid position
+        origin = cube["origin"][0:3]
+        return cube["data"], cube["atoms"], origin
 
     def _load_data(self):
         obj_list = []
@@ -184,9 +187,9 @@ class ChargeDataLoader(msgnet.dataloader.DataLoader):
         with tarfile.open(self.download_dest, "r") as tar:
             for i, tarinfo in enumerate(tar.getmembers()):
                 if tarinfo.name.endswith(".cube"):
-                    density, atoms = self._extract_cube(tar, tarinfo)
+                    density, atoms, origin = self._extract_cube(tar, tarinfo)
                 else:
-                    density, atoms = self._extract_vasp(tar, tarinfo)
+                    density, atoms, origin = self._extract_vasp(tar, tarinfo)
                 probe_pos = np.array([0.5, 0.5, 0.5]).dot(atoms.get_cell())
                 probe_atom = ase.atom.Atom(0, probe_pos)
                 atoms.append(probe_atom)
@@ -201,6 +204,7 @@ class ChargeDataLoader(msgnet.dataloader.DataLoader):
                 )
                 grid_pos = np.stack(grid_pos, 3)
                 grid_pos = np.dot(grid_pos, atoms.get_cell())
+                grid_pos = grid_pos + origin
 
                 graphobj = FeatureGraphVirtual(
                     atoms, "const",
