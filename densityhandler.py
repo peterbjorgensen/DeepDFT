@@ -53,10 +53,11 @@ class DensityDataHandler(msgnet.datahandler.DataHandler):
             assert self.preprocessing_batch_size == batch_size, "Train batch size is fixed when using train queue"
             assert self.preprocessing_probe_count == probe_count, "Probe count is fixed when using train queue"
             training_dict = self.train_queue.get()
-            try:
-                self.train_queue.put(training_dict, block=False)
-            except queue.Full:
-                pass
+            if self.train_queue.qsize() < (self.preprocessing_size // 2):
+                try:
+                    self.train_queue.put(training_dict, block=False)
+                except queue.Full:
+                    pass
         else:
             training_dict = self.sample_objects(self.train_index_generator, batch_size, probe_count, self.graph_objects)
         self.modify_dict(training_dict)
