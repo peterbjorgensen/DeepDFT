@@ -144,12 +144,27 @@ def main():
                 mae = np.mean(np.abs(errors))
 
                 if args.output_name is not None:
+                    name, ext = os.path.splitext(data_handler.graph_objects[0].filename)
                     write_cube_to_tar(
                         tar,
                         data_handler.graph_objects[0].atoms,
                         pred_density,
                         data_handler.graph_objects[0].grid_position[0,0,0],
-                        data_handler.graph_objects[0].filename,
+                        name + "_prediction" + ext,
+                        )
+                    write_cube_to_tar(
+                        tar,
+                        data_handler.graph_objects[0].atoms,
+                        errors,
+                        data_handler.graph_objects[0].grid_position[0,0,0],
+                        name + "_error" + ext,
+                        )
+                    write_cube_to_tar(
+                        tar,
+                        data_handler.graph_objects[0].atoms,
+                        target_density,
+                        data_handler.graph_objects[0].grid_position[0,0,0],
+                        name + "_target" + ext,
                         )
 
                 print("split=%s, filename=%s, mae=%f, rmse=%f" % (split_name, gobj.filename, mae, rmse))
