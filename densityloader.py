@@ -26,9 +26,15 @@ class FeatureGraphVirtual():
     ):
         self.atoms = atoms_obj
 
+        # Insert probe atom
+        atoms = self.atoms.copy()
+        probe_pos = np.array([0.5, 0.5, 0.5]).dot(atoms.get_cell())
+        probe_atom = ase.atom.Atom(0, probe_pos)
+        atoms.append(probe_atom)
+
         if cutoff_type == "const":
             graph_tuple = self.atoms_to_graph_const_cutoff(
-                self.atoms,
+                atoms,
                 cutoff_radius,
                 atom_to_node_fn,
                 self_interaction=self_interaction,
@@ -190,9 +196,6 @@ class ChargeDataLoader(msgnet.dataloader.DataLoader):
                     density, atoms, origin = self._extract_cube(tar, tarinfo)
                 else:
                     density, atoms, origin = self._extract_vasp(tar, tarinfo)
-                probe_pos = np.array([0.5, 0.5, 0.5]).dot(atoms.get_cell())
-                probe_atom = ase.atom.Atom(0, probe_pos)
-                atoms.append(probe_atom)
 
                 # Calculate grid positions
                 ngridpts = np.array(density.shape) #grid matrix
