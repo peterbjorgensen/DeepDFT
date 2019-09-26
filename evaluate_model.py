@@ -77,13 +77,13 @@ def write_cube(fileobj, atoms, data=None, origin=None, comment=None):
         fileobj.write("%e\n" % el)
 
 
-def write_cube_to_tar(tar, atoms, cubedata, filename):
+def write_cube_to_tar(tar, atoms, cubedata, origin, filename):
     cbuf = io.StringIO()
     write_cube(
         cbuf,
         atoms,
         data=cubedata,
-        origin=(0,0,0),
+        origin=origin,
         comment=filename,
     )
     cbuf.seek(0)
@@ -103,7 +103,7 @@ def main():
     graph_obj_list = densityloader.load()
     data_handler = DensityDataHandler(graph_obj_list)
 
-    train_handler, test_handler, validation_handler = data_handler.train_test_split(split_type="count", validation_size=10, test_size=0)
+    train_handler, test_handler, validation_handler = data_handler.train_test_split(split_type="count", validation_size=10, test_size=10)
     data_splits = {"train": train_handler, "test": test_handler, "validation": validation_handler}
 
     with tf.Session() as sess:
@@ -148,6 +148,7 @@ def main():
                         tar,
                         data_handler.graph_objects[0].atoms,
                         pred_density,
+                        data_handler.graph_objects[0].grid_position[0,0,0],
                         data_handler.graph_objects[0].filename,
                         )
 
