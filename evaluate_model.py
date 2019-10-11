@@ -150,21 +150,21 @@ def main():
                         data_handler.graph_objects[0].atoms,
                         pred_density,
                         data_handler.graph_objects[0].grid_position[0,0,0],
-                        name + "_prediction" + ext,
+                        name + "_prediction" + ext + ".zz",
                         )
                     write_cube_to_tar(
                         tar,
                         data_handler.graph_objects[0].atoms,
                         errors,
                         data_handler.graph_objects[0].grid_position[0,0,0],
-                        name + "_error" + ext,
+                        name + "_error" + ext + ".zz",
                         )
                     write_cube_to_tar(
                         tar,
                         data_handler.graph_objects[0].atoms,
                         target_density,
                         data_handler.graph_objects[0].grid_position[0,0,0],
-                        name + "_target" + ext,
+                        name + "_target" + ext + ".zz",
                         )
 
                 print("split=%s, filename=%s, mae=%f, rmse=%f" % (split_name, gobj.filename, mae, rmse))
