@@ -78,11 +78,22 @@ def write_cube(fileobj, atoms, data=None, origin=None, comment=None):
 
 
 def write_cube_to_tar(tar, atoms, cubedata, origin, filename):
+    """write_cube_to_tar
+    Write cube file to tar archive and compress the file using zlib.
+    Cubedata is expected to be in electrons/Å^3 and is converted to
+    electrons/Bohr^3, which is cube file convention
+
+    :param tar:
+    :param atoms:
+    :param cubedata:
+    :param origin:
+    :param filename:
+    """
     cbuf = io.StringIO()
     write_cube(
         cbuf,
         atoms,
-        data=cubedata,
+        data=cubedata*(ase.units.Bohr**3),
         origin=origin,
         comment=filename,
     )

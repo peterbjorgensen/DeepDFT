@@ -12,6 +12,7 @@ import pickle
 from ase.neighborlist import NeighborList
 from ase.calculators.vasp import VaspChargeDensity
 import ase.io.cube
+import ase.units
 import msgnet
 
 class FeatureGraphVirtual():
@@ -180,6 +181,9 @@ class ChargeDataLoader(msgnet.dataloader.DataLoader):
         # sometimes there is an entry at index 3
         # denoting the number of values for each grid position
         origin = cube["origin"][0:3]
+        # by convention the cube electron density is given in electrons/Bohr^3,
+        # and ase read_cube does not convert to electrons/Å^3, so we do the conversion here
+        cube["data"] *= (1./ase.units.Bohr**3)
         return cube["data"], cube["atoms"], origin
 
     def _load_data(self):
