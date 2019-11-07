@@ -1,7 +1,11 @@
+import os
+import glob
 import numpy as np
+import ase
 import tensorflow as tf
 from tensorflow.contrib import layers
 import msgnet
+import interpolation
 
 def repeat(data, n_repeats, axis):
     assert axis==0
@@ -132,6 +136,51 @@ def edge_update(node_states, edge_states):
     )
     return new_edge
 
+class BaselineModel():
+
+    def __init__(self, single_atom_dir):
+        self.x_min, self.x_max, self.ref_matrix = self.build_model(single_atom_dir)
+
+    def build_model(self, atom_dir):
+        interp_funcs = {}
+        for fname in glob.glob(os.path.join(atom_dir, "*.txt")):
+            head, tail = os.path.split(fname)
+            sym, ext = os.path.splitext(tail)
+
+            # The density files are in Bohr and electrons/Bohr**3
+            # Convert to Å and electrons/Å**3
+            data = np.loadtxt(fname, dtype=np.float32)
+            data[:, 0] = data[:, 0]*ase.units.Bohr
+            data[:, 1] = data[:, 1]/ase.units.Bohr**3
+            #integral = scipy.integrate.trapz(data[:,1]*data[:,0]**2, data[:,0])*4*np.pi
+            #print(fname, integral)
+
+            x_step = np.diff(data[:,0])
+            x_min = data[0,0]
+            x_max = data[-1,0]
+            x_step_mean = np.mean(x_step)
+            assert np.max(x_step-x_step_mean) < 1e-6, "regular grid assumed"
+            interp_funcs[ase.data.atomic_numbers[sym]] = data[:,1]
+        for i, (key, val) in enumerate(interp_funcs.items()):
+            if i == 0:
+                ref_len = val.shape[0]
+                ref_matrix = np.zeros((len(ase.data.chemical_symbols), ref_len), dtype=np.float32)
+            ref_matrix[key] = val
+        return x_min, x_max, tf.convert_to_tensor(ref_matrix)
+
+
+    def get_density(self, atomic_numbers, distances):
+        """get_density
+
+        :param atomic_numbers: 1-D tensor of length num_nodes
+        :param distances: [N,1] tensor of length num_probes_edges with distance between each node and the corresponding probes
+        """
+        import interpolation
+        y_ref_mat = tf.gather(self.ref_matrix, atomic_numbers) # num_nodes, num_ref_values
+        density = interpolation.batch_interp_regular_1d_grid(distances, self.x_min, self.x_max, y_ref_mat)
+
+        return density
+
 class DensityMsgPassing:
     def __init__(
         self,
@@ -147,6 +196,7 @@ class DensityMsgPassing:
         target_mean=0.0,
         target_std=1.0,
         hard_cutoff=6.0,
+        single_atom_reference_dir=None
     ):
         """__init__
 
@@ -393,6 +443,21 @@ class DensityMsgPassing:
             activation=msgnet.defaults.nonlinearity,
             weights_initializer=msgnet.defaults.initializer,
         )
+
+        if single_atom_reference_dir is not None:
+            # Compute contribution from baseline model
+            baseline = BaselineModel(single_atom_reference_dir)
+            atomic_numbers = tf.gather(self.sym_nodes, sym_probe_conn[:,0])
+            baseline_atom_density = baseline.get_density(atomic_numbers, sym_probe_dist)
+            baseline_total_density = tf.unsorted_segment_sum(
+                baseline_atom_density,
+                sym_probe_conn[:,1],
+                tf.shape(density)[0],
+            )
+
+            baseline_density_normalized = (baseline_total_density-self.sym_target_mean)/self.sym_target_std
+
+            density = density + baseline_density_normalized
 
         self.graph_out_normalized = tf.reshape(density, tf.shape(self.sym_probe_xyz)[0:2], name="graph_out_normalized")
         self.graph_out = tf.add(self.graph_out_normalized * self.sym_target_std, self.sym_target_mean, name="graph_out")

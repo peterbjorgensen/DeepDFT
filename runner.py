@@ -22,7 +22,6 @@ def get_arguments(arg_list=None):
     )
     parser.add_argument("--load_model", type=str, default=None)
     parser.add_argument("--dataset", type=str, default=None)
-    parser.add_argument("--plot_density", type=str, default=None)
     parser.add_argument("--learning_rate", type=float, default=1e-4)
     parser.add_argument("--use_train_queue", action="store_true")
 
@@ -52,7 +51,9 @@ def get_model():
         edge_feature_expand=[(0, 0.01, CUTOFF_ANGSTROM+1)],
         use_edge_updates=False,
         num_passes=6,
-        hard_cutoff=CUTOFF_ANGSTROM)
+        hard_cutoff=CUTOFF_ANGSTROM,
+        single_atom_reference_dir=os.path.join(os.path.dirname(os.path.abspath(__file__)), "single_atom_reference/"),
+        )
 
     return model
 
@@ -176,56 +177,6 @@ def train_model(args, logs_path):
                 else:
                     model.save(sess, logs_path + "model.ckpt", global_step=update_step)
 
-def plot_prediction(args):
-    from mayavi import mlab
-    model = get_model()
-    densityloader = ChargeDataLoader(args.dataset, CUTOFF_ANGSTROM)
-    graph_obj_list = densityloader.load()
-
-    data_handler = DensityDataHandler([graph_obj_list[0].decompress()])
-
-    with tf.Session() as sess:
-        sess.run(tf.global_variables_initializer())
-
-        model.load(sess, args.plot_density)
-
-        density = []
-        target_density = []
-        for input_data in data_handler.get_test_batches(100):
-            feed_dict = {}
-            for key, val in model.get_input_symbols().items():
-                feed_dict[val] = input_data[key]
-            test_pred, = sess.run([model.get_graph_out()], feed_dict=feed_dict)
-            density.append(test_pred.squeeze(0))
-            target_density.append(input_data["probes_target"].squeeze(0))
-
-        pred_density = np.concatenate(density)
-        target_density = np.concatenate(target_density)
-
-    pred_density = pred_density.reshape(data_handler.graph_objects[0].grid_position.shape[0:3])
-    target_density = target_density.reshape(data_handler.graph_objects[0].grid_position.shape[0:3])
-
-    errors = target_density-pred_density
-    rmse = np.sqrt(np.mean(np.square(errors)))
-    mae = np.mean(np.abs(errors))
-
-    print("mae=%f, rmse=%f" % (mae, rmse))
-
-    x = data_handler.graph_objects[0].grid_position[:,:,:,0]
-    y = data_handler.graph_objects[0].grid_position[:,:,:,1]
-    z = data_handler.graph_objects[0].grid_position[:,:,:,2]
-
-    mlab.contour3d(x,y,z,pred_density)
-    mlab.contour3d(x,y,z,target_density)
-    mlab.contour3d(x,y,z,errors)
-
-    x = data_handler.graph_objects[0].atoms.get_positions()[:,0]
-    y = data_handler.graph_objects[0].atoms.get_positions()[:,1]
-    z = data_handler.graph_objects[0].atoms.get_positions()[:,2]
-    mlab.points3d(x,y,z)
-
-    mlab.show()
-
 def main():
     args = get_arguments()
     try:
@@ -244,10 +195,7 @@ def main():
         ],
     )
     logging.debug("logging to %s" % logs_path)
-    if args.plot_density:
-        plot_prediction(args)
-    else:
-        train_model(args, logs_path)
+    train_model(args, logs_path)
 
 if __name__ == "__main__":
     main()
