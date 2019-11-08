@@ -14,8 +14,6 @@ from densityhandler import DensityDataHandler
 from trainer import DensityOutputTrainer
 from ase.neighborlist import NeighborList
 
-CUTOFF_ANGSTROM = 5.0
-
 def get_arguments(arg_list=None):
     parser = argparse.ArgumentParser(
         description="Train graph convolution network", fromfile_prefix_chars="@"
@@ -24,24 +22,29 @@ def get_arguments(arg_list=None):
     parser.add_argument("--dataset", type=str, default=None)
     parser.add_argument("--learning_rate", type=float, default=1e-4)
     parser.add_argument("--use_train_queue", action="store_true")
+    parser.add_argument("--use_lazy_loader", action="store_true")
+    parser.add_argument("--cutoff", type=float, default=5.0)
 
     return parser.parse_args(arg_list)
 
-def get_model():
+def get_model(cutoff):
     embedding_size = 128
 
     model = densitymsg.DensityMsgPassing(
         embedding_shape=(len(ase.data.chemical_symbols), embedding_size),
-        edge_feature_expand=[(0, 0.01, CUTOFF_ANGSTROM+1)],
+        edge_feature_expand=[(0, 0.01, cutoff+1)],
         use_edge_updates=False,
         num_passes=6,
-        hard_cutoff=CUTOFF_ANGSTROM,
+        hard_cutoff=cutoff,
         )
 
     return model
 
 def train_model(args, logs_path):
-    densityloader = LazyChargeDataLoader(args.dataset, CUTOFF_ANGSTROM)
+    if args.use_lazy_loader:
+        densityloader = LazyChargeDataLoader(args.dataset, args.cutoff)
+    else:
+        densityloader = ChargeDataLoader(args.dataset, args.cutoff)
     graph_obj_list = densityloader.load()
 
     data_handler = DensityDataHandler(graph_obj_list)
@@ -60,7 +63,7 @@ def train_model(args, logs_path):
 
     batch_size = 1
 
-    model = get_model()
+    model = get_model(args.cutoff)
 
     trainer = DensityOutputTrainer(model, train_handler, batch_size=batch_size, initial_lr=args.learning_rate)
 
