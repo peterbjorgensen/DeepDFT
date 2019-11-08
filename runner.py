@@ -9,7 +9,7 @@ import msgnet
 import tensorflow as tf
 import numpy as np
 import densitymsg
-from densityloader import ChargeDataLoader
+from densityloader import ChargeDataLoader, LazyChargeDataLoader
 from densityhandler import DensityDataHandler
 from trainer import DensityOutputTrainer
 from ase.neighborlist import NeighborList
@@ -27,22 +27,6 @@ def get_arguments(arg_list=None):
 
     return parser.parse_args(arg_list)
 
-class ReadoutLastnode(msgnet.readout.ReadoutFunction):
-    is_sum = False
-
-    def __call__(self, nodes, segments):
-        nodes_size = int(nodes.get_shape()[1])
-        set_len = tf.segment_sum(tf.ones_like(segments), segments, name="set_len")
-        last_node_idx = tf.cumsum(set_len) - 1
-        last_nodes = tf.gather(nodes, last_node_idx)
-        graph_out = msgnet.defaults.mlp(
-            last_nodes,
-            [nodes_size, nodes_size, self.output_size],
-            activation=msgnet.defaults.nonlinearity,
-            weights_initializer=msgnet.defaults.initializer,
-        )
-        return graph_out
-
 def get_model():
     embedding_size = 128
 
@@ -52,13 +36,12 @@ def get_model():
         use_edge_updates=False,
         num_passes=6,
         hard_cutoff=CUTOFF_ANGSTROM,
-        single_atom_reference_dir=os.path.join(os.path.dirname(os.path.abspath(__file__)), "single_atom_reference/"),
         )
 
     return model
 
 def train_model(args, logs_path):
-    densityloader = ChargeDataLoader(args.dataset, CUTOFF_ANGSTROM)
+    densityloader = LazyChargeDataLoader(args.dataset, CUTOFF_ANGSTROM)
     graph_obj_list = densityloader.load()
 
     data_handler = DensityDataHandler(graph_obj_list)

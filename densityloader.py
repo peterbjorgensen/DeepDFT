@@ -144,6 +144,70 @@ class CompressedDataEntry():
             obj = pickle.loads(decompbytes)
         return obj
 
+def extract_vasp(tar, tarinfo):
+    buf = tar.extractfile(tarinfo)
+    tmppath = "/tmp/extracted%d" % os.getpid()
+    with open(tmppath, "wb") as tmpfile:
+        tmpfile.write(buf.read())
+    vasp_charge = VaspChargeDensity(filename=tmppath)
+    os.remove(tmppath)
+    density = vasp_charge.chg[-1] #seperate density
+    atoms = vasp_charge.atoms[-1] #seperate atom positions
+    return density, atoms, np.zeros(3) # TODO: Can we always assume origin at 0,0,0?
+
+def extract_cube(tar, tarinfo):
+    textbuf = io.TextIOWrapper(tar.extractfile(tarinfo))
+    cube = ase.io.cube.read_cube(textbuf)
+    # sometimes there is an entry at index 3
+    # denoting the number of values for each grid position
+    origin = cube["origin"][0:3]
+    # by convention the cube electron density is given in electrons/Bohr^3,
+    # and ase read_cube does not convert to electrons/Å^3, so we do the conversion here
+    cube["data"] *= (1./ase.units.Bohr**3)
+    return cube["data"], cube["atoms"], origin
+
+def extract_compressed_cube(tar, tarinfo):
+    buf = tar.extractfile(tarinfo)
+    cube_file = io.StringIO(zlib.decompress(buf.read()).decode())
+    cube = ase.io.cube.read_cube(cube_file)
+    # sometimes there is an entry at index 3
+    # denoting the number of values for each grid position
+    origin = cube["origin"][0:3]
+    # by convention the cube electron density is given in electrons/Bohr^3,
+    # and ase read_cube does not convert to electrons/Å^3, so we do the conversion here
+    cube["data"] *= (1./ase.units.Bohr**3)
+    return cube["data"], cube["atoms"], origin
+
+def tarinfo_to_graphobj(tar, tarinfo, cutoff_radius):
+    if tarinfo.name.endswith(".cube"):
+        density, atoms, origin = extract_cube(tar, tarinfo)
+    elif tarinfo.name.endswith(".cube.zz"):
+        density, atoms, origin = extract_compressed_cube(tar, tarinfo)
+    else:
+        density, atoms, origin = extract_vasp(tar, tarinfo)
+
+    # Calculate grid positions
+    ngridpts = np.array(density.shape) #grid matrix
+    grid_pos = np.meshgrid(
+        np.arange(ngridpts[0])/density.shape[0],
+        np.arange(ngridpts[1])/density.shape[1],
+        np.arange(ngridpts[2])/density.shape[2],
+        indexing='ij',
+    )
+    grid_pos = np.stack(grid_pos, 3)
+    grid_pos = np.dot(grid_pos, atoms.get_cell())
+    grid_pos = grid_pos + origin
+
+    graphobj = FeatureGraphVirtual(
+        atoms, "const",
+        cutoff_radius,
+        lambda x: x,
+        density=density,
+        grid_position=grid_pos,
+        filename=tarinfo.name
+        )
+    return graphobj
+
 class ChargeDataLoader(msgnet.dataloader.DataLoader):
     def __init__(self, vasp_fname, cutoff_radius):
         super().__init__()
@@ -164,28 +228,6 @@ class ChargeDataLoader(msgnet.dataloader.DataLoader):
             cutname,
         )
 
-    def _extract_vasp(self, tar, tarinfo):
-        buf = tar.extractfile(tarinfo)
-        tmppath = "/tmp/extracted%d" % os.getpid()
-        with open(tmppath, "wb") as tmpfile:
-            tmpfile.write(buf.read())
-        vasp_charge = VaspChargeDensity(filename=tmppath)
-        os.remove(tmppath)
-        density = vasp_charge.chg[-1] #seperate density
-        atoms = vasp_charge.atoms[-1] #seperate atom positions
-        return density, atoms, np.zeros(3) # TODO: Can we always assume origin at 0,0,0?
-
-    def _extract_cube(self, tar, tarinfo):
-        textbuf = io.TextIOWrapper(tar.extractfile(tarinfo))
-        cube = ase.io.cube.read_cube(textbuf)
-        # sometimes there is an entry at index 3
-        # denoting the number of values for each grid position
-        origin = cube["origin"][0:3]
-        # by convention the cube electron density is given in electrons/Bohr^3,
-        # and ase read_cube does not convert to electrons/Å^3, so we do the conversion here
-        cube["data"] *= (1./ase.units.Bohr**3)
-        return cube["data"], cube["atoms"], origin
-
     def _load_data(self):
         obj_list = []
         with tarfile.open(self.final_dest, "r:") as tar:
@@ -196,32 +238,31 @@ class ChargeDataLoader(msgnet.dataloader.DataLoader):
     def _preprocess(self):
         with tarfile.open(self.download_dest, "r") as tar:
             for i, tarinfo in enumerate(tar.getmembers()):
-                if tarinfo.name.endswith(".cube"):
-                    density, atoms, origin = self._extract_cube(tar, tarinfo)
-                else:
-                    density, atoms, origin = self._extract_vasp(tar, tarinfo)
-
-                # Calculate grid positions
-                ngridpts = np.array(density.shape) #grid matrix
-                grid_pos = np.meshgrid(
-                    np.arange(ngridpts[0])/density.shape[0],
-                    np.arange(ngridpts[1])/density.shape[1],
-                    np.arange(ngridpts[2])/density.shape[2],
-                    indexing='ij',
-                )
-                grid_pos = np.stack(grid_pos, 3)
-                grid_pos = np.dot(grid_pos, atoms.get_cell())
-                grid_pos = grid_pos + origin
-
-                graphobj = FeatureGraphVirtual(
-                    atoms, "const",
-                    self.cutoff_radius,
-                    lambda x: x,
-                    density=density,
-                    grid_position=grid_pos,
-                    filename=tarinfo.name
-                    )
+                graphobj = tarinfo_to_graphobj(tar, tarinfo, self.cutoff_radius)
                 yield graphobj
                 if i % 100 == 0:
                     print("%010d    " % i, sep="", end="\r")
             print("")
+
+class LazyCompressedDataEntry():
+    def __init__(self, tarpath, member, cutoff_radius):
+        self.source_tar = tarpath
+        self.member = member
+        self.cutoff_radius = cutoff_radius
+
+    def decompress(self):
+        with tarfile.open(self.source_tar, "r") as tar:
+            graphobj = tarinfo_to_graphobj(tar, self.member, self.cutoff_radius)
+        return graphobj
+
+class LazyChargeDataLoader():
+    def __init__(self, tar_fname, cutoff_radius):
+        self.tar_filename = tar_fname
+        self.cutoff_radius = cutoff_radius
+
+    def load(self):
+        obj_list = []
+        with tarfile.open(self.tar_filename, "r:") as tar:
+            for member in tar.getmembers():
+                obj_list.append(LazyCompressedDataEntry(self.tar_filename, member, self.cutoff_radius))
+        return obj_list
