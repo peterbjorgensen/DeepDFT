@@ -122,11 +122,17 @@ class FeatureGraphVirtual():
                     connections.append([jj, ii])
                     connections_offset.append([[offs[0], offs[1], offs[2]], [0,0,0]])
 
+        if connections:
+            connections = np.array(connections)
+            connections_offset = np.array(connections_offset)
+        else:
+            connections = np.zeros((0,2))
+            connections_offset = np.zeros((0,2,3))
         return (
             np.array(nodes),
             atom_positions,
-            np.array(connections),
-            np.array(connections_offset),
+            connections,
+            connections_offset,
             unitcell,
             np.array(probe_connections),
             np.array(probe_connections_offset),
