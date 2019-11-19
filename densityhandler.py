@@ -16,7 +16,7 @@ def thread_handover(mp_queue, thread_queue):
         thread_queue.put(mp_queue.get())
 
 class DensityDataHandler(msgnet.datahandler.DataHandler):
-    def __init__(self, graph_objects, preprocessing_size=10, preprocessing_batch_size=1, preprocessing_probe_count=100):
+    def __init__(self, graph_objects, preprocessing_size=10, preprocessing_batch_size=1, preprocessing_probe_count=1000):
         self.preprocessing_size = preprocessing_size
         self.preprocessing_batch_size = preprocessing_batch_size
         self.preprocessing_probe_count = preprocessing_probe_count
@@ -48,7 +48,7 @@ class DensityDataHandler(msgnet.datahandler.DataHandler):
     def from_self(self, objects):
         return self.__class__(objects, preprocessing_size=self.preprocessing_size)
 
-    def get_train_batch(self, batch_size, probe_count=100):
+    def get_train_batch(self, batch_size, probe_count=1000):
         if self.train_queue is not None:
             assert self.preprocessing_batch_size == batch_size, "Train batch size is fixed when using train queue"
             assert self.preprocessing_probe_count == probe_count, "Probe count is fixed when using train queue"
