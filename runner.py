@@ -36,6 +36,7 @@ def get_model(cutoff):
         use_edge_updates=False,
         num_passes=6,
         hard_cutoff=cutoff,
+        single_atom_reference_dir=os.path.join(os.path.dirname(os.path.abspath(__file__)), "single_atom_reference/"),
         )
 
     return model

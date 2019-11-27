@@ -151,7 +151,8 @@ class BaselineModel():
             # Convert to Å and electrons/Å**3
             data = np.loadtxt(fname, dtype=np.float32)
             data[:, 0] = data[:, 0]*ase.units.Bohr
-            data[:, 1] = data[:, 1]/ase.units.Bohr**3
+            data[:, 1] = data[:, 1]/ase.units.Bohr**3 # SCF density
+            data[:, 2] = data[:, 2]/ase.units.Bohr**3 # Core density
             #integral = scipy.integrate.trapz(data[:,1]*data[:,0]**2, data[:,0])*4*np.pi
             #print(fname, integral)
 
@@ -160,7 +161,7 @@ class BaselineModel():
             x_max = data[-1,0]
             x_step_mean = np.mean(x_step)
             assert np.max(x_step-x_step_mean) < 1e-6, "regular grid assumed"
-            interp_funcs[ase.data.atomic_numbers[sym]] = data[:,1]
+            interp_funcs[ase.data.atomic_numbers[sym]] = data[:,1]-data[:,2] # Subtract core density
         for i, (key, val) in enumerate(interp_funcs.items()):
             if i == 0:
                 ref_len = val.shape[0]
