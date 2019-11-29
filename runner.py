@@ -70,7 +70,7 @@ def train_model(args, logs_path):
     if args.dataset.endswith(".txt"):
         # Text file contains list of datafiles
         with open(args.dataset, "r") as datasetfiles:
-            filelist = [line.strip('\n') for line in datasetfiles]
+            filelist = [os.path.join(os.path.dirname(args.dataset), line.strip('\n')) for line in datasetfiles]
     else:
         filelist = [args.dataset]
 
