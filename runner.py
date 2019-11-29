@@ -1,8 +1,10 @@
 import sys
+import collections
 import argparse
 import os
 import timeit
 import logging
+import json
 import ase
 import ase.io
 import msgnet
@@ -24,6 +26,7 @@ def get_arguments(arg_list=None):
     parser.add_argument("--use_train_queue", action="store_true")
     parser.add_argument("--use_lazy_loader", action="store_true")
     parser.add_argument("--cutoff", type=float, default=5.0)
+    parser.add_argument("--split_file", type=str, default=None)
 
     return parser.parse_args(arg_list)
 
@@ -41,15 +44,52 @@ def get_model(cutoff):
 
     return model
 
+def split_by_file(filename, graph_objects):
+    with open(filename, "r") as f:
+        split_dict = json.load(f)
+
+    splits = collections.defaultdict(list)
+
+    for i, obj in enumerate(graph_objects):
+        for key, val in split_dict.items():
+            if i in val:
+                splits[key].append(obj)
+            elif hasattr(obj, "member") and obj.member.name in val:
+                splits[key].append(obj)
+            elif hasattr(obj, "filename") and obj.filename in val:
+                splits[key].append(obj)
+
+    return splits
+
 def train_model(args, logs_path):
     if args.use_lazy_loader:
-        densityloader = LazyChargeDataLoader(args.dataset, args.cutoff)
+        LoaderClass = LazyChargeDataLoader
     else:
-        densityloader = ChargeDataLoader(args.dataset, args.cutoff)
-    graph_obj_list = densityloader.load()
+        LoaderClass = ChargeDataLoader
 
-    data_handler = DensityDataHandler(graph_obj_list)
-    train_handler, _, validation_handler = data_handler.train_test_split(split_type="count", validation_size=10, test_size=10)
+    if args.dataset.endswith(".txt"):
+        # Text file contains list of datafiles
+        with open(args.dataset, "r") as datasetfiles:
+            filelist = [line.strip('\n') for line in datasetfiles]
+    else:
+        filelist = [args.dataset]
+
+    graph_obj_list = []
+    for i, filename in enumerate(filelist):
+        logging.debug("loading file %d/%d: %s" % (i+1, len(filelist), filename))
+        densityloader = LoaderClass(filename, args.cutoff)
+        graph_obj_list.extend(densityloader.load())
+
+
+    if args.split_file:
+        splits = split_by_file(args.split_file, graph_obj_list)
+        if "train" in splits:
+            train_handler = DensityDataHandler(splits["train"])
+        if "validation" in splits:
+            validation_handler = DensityDataHandler(splits["validation"])
+    else:
+        data_handler = DensityDataHandler(graph_obj_list)
+        train_handler, _, validation_handler = data_handler.train_test_split(split_type="count", validation_size=10, test_size=10)
 
     if args.use_train_queue:
         train_handler.setup_train_queue()
@@ -182,6 +222,11 @@ def main():
         ],
     )
     logging.debug("logging to %s" % logs_path)
+
+    if not args.load_model:
+        with open(logs_path + "commandline_args.txt", "w") as f:
+            f.write("\n".join(sys.argv[1:]))
+
     train_model(args, logs_path)
 
 if __name__ == "__main__":
