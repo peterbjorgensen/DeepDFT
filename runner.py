@@ -31,7 +31,7 @@ def get_arguments(arg_list=None):
     return parser.parse_args(arg_list)
 
 def get_model(cutoff):
-    embedding_size = 128
+    embedding_size = 256
 
     model = densitymsg.DensityMsgPassing(
         embedding_shape=(len(ase.data.chemical_symbols), embedding_size),
