@@ -108,7 +108,7 @@ def train_model(args, logs_path):
 
     trainer = DensityOutputTrainer(model, train_handler, batch_size=batch_size, initial_lr=args.learning_rate)
 
-    num_steps = int(1e7)
+    num_steps = int(5e7)
     start_step = 0
     log_interval = 10000
 
@@ -228,6 +228,8 @@ def main():
             f.write("\n".join(sys.argv[1:]))
 
     train_model(args, logs_path)
+
+    sys.exit(0)
 
 if __name__ == "__main__":
     main()
