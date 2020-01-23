@@ -8,9 +8,9 @@ import numpy as np
 import ase
 import ase.units
 import time
-from densityloader import ChargeDataLoader
+from densityloader import ChargeDataLoader, LazyChargeDataLoader
 from densityhandler import DensityDataHandler
-from runner import get_model, CUTOFF_ANGSTROM
+from runner import get_model, split_by_file
 
 def get_arguments(arg_list=None):
     parser = argparse.ArgumentParser(
@@ -19,6 +19,9 @@ def get_arguments(arg_list=None):
     parser.add_argument("--load_model", type=str, default=None)
     parser.add_argument("--dataset", type=str, default=None)
     parser.add_argument("--output_name", type=str, default=None)
+    parser.add_argument("--cutoff", type=float, default=5.0)
+    parser.add_argument("--split_file", type=str, default=None)
+    parser.add_argument("--use_lazy_loader", action="store_true")
 
     return parser.parse_args(arg_list)
 
@@ -80,7 +83,7 @@ def write_cube(fileobj, atoms, data=None, origin=None, comment=None):
 def write_cube_to_tar(tar, atoms, cubedata, origin, filename):
     """write_cube_to_tar
     Write cube file to tar archive and compress the file using zlib.
-    Cubedata is expected to be in electrons/Å^3 and is converted to
+    Cubedata is expected to be in electrons/A^3 and is converted to
     electrons/Bohr^3, which is cube file convention
 
     :param tar:
@@ -108,14 +111,39 @@ def write_cube_to_tar(tar, atoms, cubedata, origin, filename):
     tar.addfile(tarinfo, cbuf)
 
 def main():
-    model = get_model()
     args = get_arguments()
-    densityloader = ChargeDataLoader(args.dataset, CUTOFF_ANGSTROM)
-    graph_obj_list = densityloader.load()
-    data_handler = DensityDataHandler(graph_obj_list)
+    model = get_model(args.cutoff)
 
-    train_handler, test_handler, validation_handler = data_handler.train_test_split(split_type="count", validation_size=10, test_size=10)
-    data_splits = {"train": train_handler, "test": test_handler, "validation": validation_handler}
+    if args.use_lazy_loader:
+        LoaderClass = LazyChargeDataLoader
+    else:
+        LoaderClass = ChargeDataLoader
+
+    if args.dataset.endswith(".txt"):
+        # Text file contains list of datafiles
+        with open(args.dataset, "r") as datasetfiles:
+            filelist = [os.path.join(os.path.dirname(args.dataset), line.strip('\n')) for line in datasetfiles]
+    else:
+        filelist = [args.dataset]
+
+    graph_obj_list = []
+    for i, filename in enumerate(filelist):
+        print("loading file %d/%d: %s" % (i+1, len(filelist), filename))
+        densityloader = LoaderClass(filename, args.cutoff)
+        graph_obj_list.extend(densityloader.load())
+
+    if args.split_file:
+        splits = split_by_file(args.split_file, graph_obj_list)
+        data_splits = {}
+        #if "train" in splits:
+        #    data_splits["train"] = DensityDataHandler(splits["train"])
+        if "validation" in splits:
+            data_splits["validation"] = DensityDataHandler(splits["validation"])
+        if "test" in splits:
+            data_splits["test"] = DensityDataHandler(splits["test"])
+    else:
+        train_handler, test_handler, validation_handler = data_handler.train_test_split(split_type="count", validation_size=10, test_size=10)
+        data_splits = {"test": test_handler, "validation": validation_handler}
 
     with tf.Session() as sess:
         sess.run(tf.global_variables_initializer())
@@ -136,7 +164,7 @@ def main():
 
                 density = []
                 target_density = []
-                for input_data in data_handler.get_test_batches(100):
+                for input_data in data_handler.get_test_batches(10000):
                     feed_dict = {}
                     for key, val in model.get_input_symbols().items():
                         feed_dict[val] = input_data[key]
@@ -155,7 +183,10 @@ def main():
                 mae = np.mean(np.abs(errors))
 
                 if args.output_name is not None:
-                    name, ext = os.path.splitext(data_handler.graph_objects[0].filename)
+                    fname_stripped = data_handler.graph_objects[0].filename
+                    while fname_stripped.endswith(".zz"):
+                        fname_stripped = fname_stripped[:-3]
+                    name, ext = os.path.splitext(fname_stripped)
                     write_cube_to_tar(
                         tar,
                         data_handler.graph_objects[0].atoms,
