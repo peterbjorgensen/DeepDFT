@@ -30,6 +30,20 @@ def get_arguments(arg_list=None):
 
     return parser.parse_args(arg_list)
 
+def gen_prefix(namespace):
+    prefix = []
+    argdict = vars(namespace)
+    for key in [
+        "cutoff",
+        "learning_rate",
+    ]:
+        if isinstance(argdict[key], list):
+            val = "-".join([str(x) for x in argdict[key]])
+        else:
+            val = str(argdict[key])
+        prefix.append(key[0] + val)
+    return "_".join(prefix).replace(" ", "")
+
 def get_model(cutoff):
     embedding_size = 512
 
@@ -211,7 +225,7 @@ def main():
     except:
         basename = "."
 
-    logs_path = "logs/%s/" % (basename.split(".")[0])
+    logs_path = "logs/%s_%s/" % (basename.split(".")[0], gen_prefix(args))
     os.makedirs(logs_path, exist_ok=True)
     logging.basicConfig(
         level=logging.DEBUG,
