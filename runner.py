@@ -21,6 +21,7 @@ def get_arguments(arg_list=None):
         description="Train graph convolution network", fromfile_prefix_chars="@"
     )
     parser.add_argument("--load_model", type=str, default=None)
+    parser.add_argument("--start_step", type=int, default=None)
     parser.add_argument("--dataset", type=str, default=None)
     parser.add_argument("--learning_rate", type=float, default=1e-4)
     parser.add_argument("--use_train_queue", action="store_true")
@@ -123,7 +124,6 @@ def train_model(args, logs_path):
     trainer = DensityOutputTrainer(model, train_handler, batch_size=batch_size, initial_lr=args.learning_rate)
 
     num_steps = int(5e7)
-    start_step = 0
     log_interval = 10000
 
     best_val_mae = np.inf
@@ -138,17 +138,19 @@ def train_model(args, logs_path):
             if args.load_model.endswith(".meta"):
                 checkpoint = args.load_model.replace(".meta", "")
                 logging.info("loading model from %s", checkpoint)
-                start_step = int(checkpoint.split("/")[-1].split("-")[-1])
+                model_step = int(checkpoint.split("/")[-1].split("-")[-1])
                 model.load(sess, checkpoint)
             else:
                 checkpoint = tf.train.get_checkpoint_state(args.load_model)
                 logging.info("loading model from %s", checkpoint)
-                start_step = int(
+                model_step = int(
                     checkpoint.model_checkpoint_path.split("/")[-1].split("-")[-1]
                 )
                 model.load(sess, checkpoint.model_checkpoint_path)
         else:
-            start_step = 0
+            model_step = 0
+
+        start_step = args.start_step if args.start_step is not None else model_step
 
         # Print shape of all trainable variables
         trainable_vars = tf.trainable_variables()
