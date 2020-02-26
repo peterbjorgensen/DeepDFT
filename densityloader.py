@@ -150,11 +150,14 @@ class CompressedDataEntry():
             obj = pickle.loads(decompbytes)
         return obj
 
-def extract_vasp(tar, tarinfo):
+def extract_vasp(tar, tarinfo, compressed=False):
     buf = tar.extractfile(tarinfo)
     tmppath = "/tmp/extracted%d" % os.getpid()
     with open(tmppath, "wb") as tmpfile:
-        tmpfile.write(buf.read())
+        if compressed:
+            tmpfile.write(zlib.decompress(buf.read()))
+        else:
+            tmpfile.write(buf.read())
     vasp_charge = VaspChargeDensity(filename=tmppath)
     os.remove(tmppath)
     density = vasp_charge.chg[-1] #seperate density
@@ -189,8 +192,10 @@ def tarinfo_to_graphobj(tar, tarinfo, cutoff_radius):
         density, atoms, origin = extract_cube(tar, tarinfo)
     elif tarinfo.name.endswith(".cube.zz"):
         density, atoms, origin = extract_compressed_cube(tar, tarinfo)
+    elif tarinfo.name.lower().endswith(".chgcar.zz"):
+        density, atoms, origin = extract_vasp(tar, tarinfo, True)
     else:
-        density, atoms, origin = extract_vasp(tar, tarinfo)
+        density, atoms, origin = extract_vasp(tar, tarinfo, False)
 
     # Calculate grid positions
     ngridpts = np.array(density.shape) #grid matrix
