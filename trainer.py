@@ -65,3 +65,11 @@ class DensityOutputTrainer(msgnet.train.Trainer):
         )
 
         return graph_cost
+
+    def step(self, session, step, probe_count=1000):
+        input_data = self.batchloader.get_train_batch(self.batch_size, probe_count=probe_count)
+        feed_dict = {}
+        for key in self.input_symbols.keys():
+            feed_dict[self.input_symbols[key]] = input_data[key]
+        feed_dict[self.sym_learning_rate] = self.get_learning_rate(step)
+        session.run([self.train_op], feed_dict=feed_dict)

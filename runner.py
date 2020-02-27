@@ -22,6 +22,7 @@ def get_arguments(arg_list=None):
     )
     parser.add_argument("--load_model", type=str, default=None)
     parser.add_argument("--start_step", type=int, default=None)
+    parser.add_argument("--probe_count", type=int, default=1000)
     parser.add_argument("--dataset", type=str, default=None)
     parser.add_argument("--learning_rate", type=float, default=1e-4)
     parser.add_argument("--use_train_queue", action="store_true")
@@ -160,7 +161,7 @@ def train_model(args, logs_path):
         logging.debug("starting training")
 
         for update_step in range(start_step, num_steps):
-            trainer.step(sess, update_step)
+            trainer.step(sess, update_step, probe_count=args.probe_count)
 
             if (update_step % log_interval == 0) or (update_step + 1) == num_steps:
                 test_start_time = timeit.default_timer()
