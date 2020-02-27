@@ -46,7 +46,11 @@ class DensityDataHandler(msgnet.datahandler.DataHandler):
         self.train_worker.start()
 
     def from_self(self, objects):
-        return self.__class__(objects, preprocessing_size=self.preprocessing_size)
+        return self.__class__(
+            objects,
+            preprocessing_size=self.preprocessing_size,
+            preprocessing_batch_size=self.preprocessing_batch_size,
+            preprocessing_probe_count=self.preprocessing_probe_count)
 
     def get_train_batch(self, batch_size, probe_count=1000):
         if self.train_queue is not None:

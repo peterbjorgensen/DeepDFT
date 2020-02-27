@@ -100,17 +100,17 @@ def train_model(args, logs_path):
     if args.split_file:
         splits = split_by_file(args.split_file, graph_obj_list)
         if "train" in splits:
-            train_handler = DensityDataHandler(splits["train"])
+            train_handler = DensityDataHandler(splits["train"], preprocessing_probe_count=args.probe_count)
         if "validation" in splits:
-            validation_handler = DensityDataHandler(splits["validation"])
+            validation_handler = DensityDataHandler(splits["validation"], preprocessing_probe_count=args.probe_count)
     else:
-        data_handler = DensityDataHandler(graph_obj_list)
+        data_handler = DensityDataHandler(graph_obj_list, preprocessing_probe_count=args.probe_count)
         train_handler, _, validation_handler = data_handler.train_test_split(split_type="count", validation_size=10, test_size=10)
 
     if args.use_train_queue:
         train_handler.setup_train_queue()
         num_samples_train_metric = 10
-        train_metrics_handler = DensityDataHandler([train_handler.graph_objects[i].decompress() for i in np.random.permutation(len(train_handler))[0:num_samples_train_metric]])
+        train_metrics_handler = DensityDataHandler([train_handler.graph_objects[i].decompress() for i in np.random.permutation(len(train_handler))[0:num_samples_train_metric]], preprocessing_probe_count=args.probe_count)
         validation_handler.graph_objects = [g.decompress() for g in validation_handler.graph_objects]
     else:
         train_metrics_handler = train_handler
