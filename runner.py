@@ -46,7 +46,7 @@ def gen_prefix(namespace):
     return "_".join(prefix).replace(" ", "")
 
 def get_model(cutoff):
-    embedding_size = 512
+    embedding_size = 256
 
     model = densitymsg.DensityMsgPassing(
         embedding_shape=(len(ase.data.chemical_symbols), embedding_size),
