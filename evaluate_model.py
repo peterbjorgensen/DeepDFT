@@ -142,6 +142,7 @@ def main():
         if "test" in splits:
             data_splits["test"] = DensityDataHandler(splits["test"])
     else:
+        data_handler = DensityDataHandler(graph_obj_list)
         train_handler, test_handler, validation_handler = data_handler.train_test_split(split_type="count", validation_size=10, test_size=10)
         data_splits = {"test": test_handler, "validation": validation_handler}
 
@@ -164,7 +165,7 @@ def main():
 
                 density = []
                 target_density = []
-                for input_data in data_handler.get_test_batches(10000):
+                for input_data in data_handler.get_test_batches(100):
                     feed_dict = {}
                     for key, val in model.get_input_symbols().items():
                         feed_dict[val] = input_data[key]
@@ -192,21 +193,21 @@ def main():
                         data_handler.graph_objects[0].atoms,
                         pred_density,
                         data_handler.graph_objects[0].grid_position[0,0,0],
-                        name + "_prediction" + ext + ".zz",
+                        name + "_prediction" + ".cube" + ".zz",
                         )
                     write_cube_to_tar(
                         tar,
                         data_handler.graph_objects[0].atoms,
                         errors,
                         data_handler.graph_objects[0].grid_position[0,0,0],
-                        name + "_error" + ext + ".zz",
+                        name + "_error" + ".cube" + ".zz",
                         )
                     write_cube_to_tar(
                         tar,
                         data_handler.graph_objects[0].atoms,
                         target_density,
                         data_handler.graph_objects[0].grid_position[0,0,0],
-                        name + "_target" + ext + ".zz",
+                        name + "_target" + ".cube" + ".zz",
                         )
 
                 print("split=%s, filename=%s, mae=%f, rmse=%f" % (split_name, gobj.filename, mae, rmse))
