@@ -463,6 +463,9 @@ class DensityMsgPassing:
         self.graph_out_normalized = tf.reshape(density, tf.shape(self.sym_probe_xyz)[0:2], name="graph_out_normalized")
         self.graph_out = tf.add(self.graph_out_normalized * self.sym_target_std, self.sym_target_mean, name="graph_out")
 
+        self.init_saver()
+
+    def init_saver(self):
         self.saver = tf.train.Saver(keep_checkpoint_every_n_hours=24, max_to_keep=3)
 
     def save(self, session, destination, global_step):

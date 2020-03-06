@@ -124,6 +124,8 @@ def train_model(args, logs_path):
 
     trainer = DensityOutputTrainer(model, train_handler, batch_size=batch_size, initial_lr=args.learning_rate)
 
+    model.init_saver() # Be re-initializing the saver, we also save trainer parameters
+
     num_steps = int(5e7)
     log_interval = 10000
 
