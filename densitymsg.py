@@ -138,8 +138,9 @@ def edge_update(node_states, edge_states):
 
 class BaselineModel():
 
-    def __init__(self, single_atom_dir):
+    def __init__(self, single_atom_dir, cutoff=None):
         self.x_min, self.x_max, self.ref_matrix = self.build_model(single_atom_dir)
+        self.cutoff = cutoff
 
     def build_model(self, atom_dir):
         interp_funcs = {}
@@ -151,6 +152,10 @@ class BaselineModel():
             # Convert to Å and electrons/Å**3
             data = np.loadtxt(fname, dtype=np.float32)
             data[:, 0] = data[:, 0]*ase.units.Bohr
+            if self.cutoff:
+                keep_indices = data[:,0] <= self.cutoff
+                data = data[keep_indices]
+
             data[:, 1] = data[:, 1]/ase.units.Bohr**3 # SCF density
             data[:, 2] = data[:, 2]/ase.units.Bohr**3 # Core density
             #integral = scipy.integrate.trapz(data[:,1]*data[:,0]**2, data[:,0])*4*np.pi
@@ -447,7 +452,7 @@ class DensityMsgPassing:
 
         if single_atom_reference_dir is not None:
             # Compute contribution from baseline model
-            baseline = BaselineModel(single_atom_reference_dir)
+            baseline = BaselineModel(single_atom_reference_dir, cutoff=hard_cutoff)
             atomic_numbers = tf.gather(self.sym_nodes, sym_probe_conn[:,0])
             baseline_atom_density = baseline.get_density(atomic_numbers, sym_probe_dist)
             baseline_total_density = tf.unsorted_segment_sum(
