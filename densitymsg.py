@@ -139,8 +139,8 @@ def edge_update(node_states, edge_states):
 class BaselineModel():
 
     def __init__(self, single_atom_dir, cutoff=None):
-        self.x_min, self.x_max, self.ref_matrix = self.build_model(single_atom_dir)
         self.cutoff = cutoff
+        self.x_min, self.x_max, self.ref_matrix = self.build_model(single_atom_dir)
 
     def build_model(self, atom_dir):
         interp_funcs = {}
