@@ -145,6 +145,7 @@ def main():
         data_handler = DensityDataHandler(graph_obj_list)
         train_handler, test_handler, validation_handler = data_handler.train_test_split(split_type="count", validation_size=10, test_size=10)
         data_splits = {"test": test_handler, "validation": validation_handler}
+        #data_splits = {"all": data_handler}
 
     with tf.Session() as sess:
         sess.run(tf.global_variables_initializer())
