@@ -1,8 +1,51 @@
 import numpy as np
 import tensorflow as tf
-import msgnet
 
-class DensityOutputTrainer(msgnet.train.Trainer):
+class Trainer:
+    def __init__(self, model, batchloader, initial_lr=1e-4, batch_size=32):
+        self.model = model
+        self.sym_learning_rate = tf.placeholder(
+            tf.float32, shape=[], name="learning_rate"
+        )
+
+        self.initial_lr = initial_lr
+
+        self.input_symbols = self.setup_input_symbols()
+        self.cost = self.setup_total_cost()
+        self.train_op = self.setup_train_op()
+        self.metric_tensors = self.setup_metrics()
+        self.batchloader = batchloader
+        self.batch_size = batch_size
+
+    def get_learning_rate(self, step):
+        learning_rate = self.initial_lr * (0.96 ** (step / 100000))
+        return learning_rate
+
+    def setup_metrics(self):
+        return {}
+
+    def setup_input_symbols(self):
+        input_symbols = self.model.get_input_symbols()
+        return input_symbols
+
+    def setup_train_op(self):
+        optimizer = tf.train.AdamOptimizer(self.sym_learning_rate)
+        gradients = optimizer.compute_gradients(self.cost)
+        train_op = optimizer.apply_gradients(gradients, name="train_op")
+        return train_op
+
+    def setup_total_cost(self):
+        raise NotImplementedError()
+
+    def step(self, session, step):
+        input_data = self.batchloader.get_train_batch(self.batch_size)
+        feed_dict = {}
+        for key in self.input_symbols.keys():
+            feed_dict[self.input_symbols[key]] = input_data[key]
+        feed_dict[self.sym_learning_rate] = self.get_learning_rate(step)
+        session.run([self.train_op], feed_dict=feed_dict)
+
+class DensityOutputTrainer(Trainer):
     def setup_input_symbols(self):
         input_symbols = self.model.get_input_symbols()
         output_size = 1

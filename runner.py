@@ -7,7 +7,6 @@ import logging
 import json
 import ase
 import ase.io
-import msgnet
 import tensorflow as tf
 import numpy as np
 import densitymsg

@@ -9,11 +9,12 @@ import warnings
 import tarfile
 import os
 import pickle
+import lz4.frame
+import settings
 from ase.neighborlist import NeighborList
 from ase.calculators.vasp import VaspChargeDensity
 import ase.io.cube
 import ase.units
-import msgnet
 
 class FeatureGraphVirtual():
     def __init__(
@@ -151,17 +152,24 @@ class CompressedDataEntry():
         return obj
 
 def extract_vasp(tar, tarinfo, compressed=False):
+    # Extract compressed file
     buf = tar.extractfile(tarinfo)
+    if tarinfo.name.endswith(".zz"):
+        filecontent = zlib.decompress(buf.read())
+    elif tarinfo.name.endswith(".lz4"):
+        filecontent = lz4.frame.decompress(buf.read())
+    else:
+        filecontent = buf.read()
+
+    # Write to tmp file and read using ASE
     tmppath = "/tmp/extracted%d" % os.getpid()
     with open(tmppath, "wb") as tmpfile:
-        if compressed:
-            tmpfile.write(zlib.decompress(buf.read()))
-        else:
-            tmpfile.write(buf.read())
+        tmpfile.write(filecontent)
     vasp_charge = VaspChargeDensity(filename=tmppath)
     os.remove(tmppath)
     density = vasp_charge.chg[-1] #separate density
     atoms = vasp_charge.atoms[-1] #separate atom positions
+
     return density, atoms, np.zeros(3) # TODO: Can we always assume origin at 0,0,0?
 
 def extract_cube(tar, tarinfo):
@@ -192,10 +200,8 @@ def tarinfo_to_graphobj(tar, tarinfo, cutoff_radius):
         density, atoms, origin = extract_cube(tar, tarinfo)
     elif tarinfo.name.endswith(".cube.zz"):
         density, atoms, origin = extract_compressed_cube(tar, tarinfo)
-    elif tarinfo.name.lower().endswith(".chgcar.zz"):
-        density, atoms, origin = extract_vasp(tar, tarinfo, True)
     else:
-        density, atoms, origin = extract_vasp(tar, tarinfo, False)
+        density, atoms, origin = extract_vasp(tar, tarinfo)
 
     # Calculate grid positions
     ngridpts = np.array(density.shape) #grid matrix
@@ -219,7 +225,136 @@ def tarinfo_to_graphobj(tar, tarinfo, cutoff_radius):
         )
     return graphobj
 
-class ChargeDataLoader(msgnet.dataloader.DataLoader):
+class DataLoader:
+    default_target = None
+    default_datasplit_args = {"split_type": "fraction", "test_size": 0.1}
+
+    def __init__(self):
+        self.download_url = None
+        self.download_dest = None
+        self.cutoff_type = "const"
+        self.cutoff_radius = 100.0
+        self.self_interaction = False
+        self.db_filter_query = None
+
+    @property
+    def final_dest(self):
+        cutname = "%s-%.2f" % (self.cutoff_type, self.cutoff_radius)
+        return "%s/%s_%s.pkz" % (
+            settings.datadir,
+            self.__class__.__name__,
+            cutname,
+        )
+
+    def _download_data(self):
+        response = requests.get(self.download_url)
+        with open(self.download_dest, "wb") as f:
+            for chunk in response.iter_content():
+                f.write(chunk)
+
+    def _preprocess(self):
+        graph_list = self.load_ase_data(
+            db_path=self.download_dest,
+            cutoff_type=self.cutoff_type,
+            cutoff_radius=self.cutoff_radius,
+            self_interaction=self.self_interaction,
+            filter_query=self.db_filter_query,
+        )
+        return graph_list
+
+    def _save(self, obj_list):
+        with tarfile.open(self.final_dest, "w") as tar:
+            for number, obj in enumerate(obj_list):
+                pbytes = pickle.dumps(obj)
+                cbytes = zlib.compress(pbytes)
+                fsize = len(cbytes)
+                cbuf = io.BytesIO(cbytes)
+                cbuf.seek(0)
+                tarinfo = tarfile.TarInfo(name="%d" % number)
+                tarinfo.size = fsize
+                tar.addfile(tarinfo, cbuf)
+
+    def _load_data(self):
+        obj_list = []
+        with tarfile.open(self.final_dest, "r") as tar:
+            for tarinfo in tar.getmembers():
+                buf = tar.extractfile(tarinfo)
+                decomp = zlib.decompress(buf)
+                obj_list.append(pickle.loads(decomp))
+        return obj_list
+
+    @staticmethod
+    def load_ase_data(
+        db_path="oqmd_all_entries.db",
+        dtype=float,
+        cutoff_type="voronoi",
+        cutoff_radius=2.0,
+        filter_query=None,
+        self_interaction=False,
+        discard_unconnected=False,
+    ):
+        """load_ase_data
+        Load atom structure data from ASE database
+
+        :param db_path: path of the database to load
+        :param dtype: dtype of returned numpy arrays
+        :param cutoff_type: voronoi, const or coval
+        :param cutoff_radius: cutoff radius of the sphere around each atom
+        :param filter_query: query string or function to select a subset of database
+        :param self_interaction: whether an atom includes itself as a neighbor (not only its images)
+        :param discard_unconnected: whether to discard samples that ends up with no edges in the graph
+        :return: list of FeatureGraph objects
+        """
+        con = ase.db.connect(db_path)
+        sel = filter_query
+
+        for i, row in enumerate(select_wfilter(con, sel)):
+            if i % 100 == 0:
+                print("%010d    " % i, sep="", end="\r")
+            atoms = row.toatoms()
+            if row.key_value_pairs:
+                prop_dict = row.key_value_pairs
+            else:
+                prop_dict = row.data
+            prop_dict["id"] = row.id
+            try:
+                graphobj = FeatureGraph(
+                    atoms,
+                    cutoff_type,
+                    cutoff_radius,
+                    lambda x: x,
+                    self_interaction=self_interaction,
+                    **prop_dict
+                )
+            except RuntimeError:
+                logging.error("Error during data conversion of row id %d", row.id)
+                continue
+            if discard_unconnected and (graphobj.conns.shape[0] == 0):
+                logging.error("Discarding %i because no connections made %s", i, atoms)
+            else:
+                yield graphobj
+        print("")
+
+    def load(self):
+        if not os.path.isfile(self.final_dest):
+            logging.info("%s does not exist" % self.final_dest)
+            if not os.path.isfile(self.download_dest):
+                logging.info(
+                    "%s does not exist, downloading data..." % self.download_dest
+                )
+                self._download_data()
+                logging.info("Download complete")
+            logging.info("Preprocessing")
+            obj_list = self._preprocess()
+            logging.info("Saving to %s" % self.final_dest)
+            self._save(obj_list)
+            del obj_list
+        logging.info("Loading data")
+        obj_list = self._load_data()
+        logging.info("Data loaded")
+        return obj_list
+
+class ChargeDataLoader(DataLoader):
     def __init__(self, vasp_fname, cutoff_radius):
         super().__init__()
         self.basename = os.path.basename(vasp_fname)
@@ -232,8 +367,8 @@ class ChargeDataLoader(msgnet.dataloader.DataLoader):
     @property
     def final_dest(self):
         cutname = "%s-%.2f" % (self.cutoff_type, self.cutoff_radius)
-        return "/%s/%s_%s_%s.pkz" % (
-            msgnet.defaults.datadir,
+        return "%s/%s_%s_%s.pkz" % (
+            settings.datadir,
             self.__class__.__name__,
             self.basename,
             cutname,

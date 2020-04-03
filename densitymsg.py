@@ -1,11 +1,59 @@
 import os
+import itertools
 import glob
 import numpy as np
 import ase
 import tensorflow as tf
 from tensorflow.contrib import layers
-import msgnet
 import interpolation
+
+def sh_softplus(x):
+    """sh_softplus
+    shifted softplus function log(1+exp(x))-log(2)
+
+    :param x:
+    """
+    return tf.nn.softplus(x) - tf.log(2.0)
+
+
+def mlp(x, hidden_units, activation=tf.tanh, last_activation=tf.identity, **kwargs):
+    var = x
+    for i, num_units in enumerate(hidden_units[:-1]):
+        var = layers.fully_connected(var, num_units, activation_fn=activation, **kwargs)
+
+    var = layers.fully_connected(
+        var, hidden_units[-1], activation_fn=last_activation, **kwargs
+    )
+    return var
+
+
+nonlinearity = sh_softplus
+initializer = tf.variance_scaling_initializer(
+    scale=1.0, mode="fan_avg", distribution="uniform"
+)
+
+def gaussian_expansion(input_x, expand_params):
+    """gaussian_expansion
+
+    :param input_x: (num_edges, n_features) tensor
+    :param expand_params: list of None or (start, step, stop) tuples
+    :returns: (num_edges, ``ceil((stop - start)/step)``) tensor
+    """
+    feat_list = tf.unstack(input_x, axis=1)
+    expanded_list = []
+    for step_tuple, feat in itertools.zip_longest(expand_params, feat_list):
+        assert feat is not None, "Too many expansion parameters given"
+        if step_tuple:
+            start, step, stop = step_tuple
+            feat_expanded = tf.expand_dims(feat, axis=1)
+            sigma = step
+            mu = np.arange(start, stop, step)
+            expanded_list.append(
+                tf.exp(-((feat_expanded - mu) ** 2) / (2.0 * sigma ** 2))
+            )
+        else:
+            expanded_list.append(tf.expand_dims(feat, 1))
+    return tf.concat(expanded_list, axis=1, name="expanded_edges")
 
 def repeat(data, n_repeats, axis):
     assert axis==0
@@ -96,12 +144,12 @@ def create_msg_function(num_outputs, cutoff_func=None, **kwargs):
         tf.add_to_collection("msg_input_nodes", nodes)
         tf.add_to_collection("msg_input_edges", edges)
         with tf.variable_scope("gates"):
-            gates = msgnet.defaults.mlp(
+            gates = mlp(
                 edges,
                 [num_outputs, num_outputs],
-                last_activation=msgnet.defaults.nonlinearity,
-                activation=msgnet.defaults.nonlinearity,
-                weights_initializer=msgnet.defaults.initializer,
+                last_activation=nonlinearity,
+                activation=nonlinearity,
+                weights_initializer=initializer,
             )
             tf.add_to_collection("msg_gates", gates)
         with tf.variable_scope("pre"):
@@ -109,7 +157,7 @@ def create_msg_function(num_outputs, cutoff_func=None, **kwargs):
                 nodes,
                 num_outputs,
                 activation_fn=tf.identity,
-                weights_initializer=msgnet.defaults.initializer,
+                weights_initializer=initializer,
                 biases_initializer=None,
                 **kwargs
             )
@@ -128,11 +176,11 @@ def edge_update(node_states, edge_states):
     edge_states_len = int(edge_states.get_shape()[1])
     nodes_states_len = int(node_states.get_shape()[1])
     combined = tf.concat((node_states, edge_states), axis=1)
-    new_edge = msgnet.defaults.mlp(
+    new_edge = mlp(
         combined,
         [nodes_states_len, nodes_states_len // 2],
-        activation=msgnet.defaults.nonlinearity,
-        weights_initializer=msgnet.defaults.initializer,
+        activation=nonlinearity,
+        weights_initializer=initializer,
     )
     return new_edge
 
@@ -302,7 +350,7 @@ class DensityMsgPassing:
 
         sym_edges = tf.expand_dims(conn_dist, 1)
         if edge_feature_expand is not None:
-            init_edges = msgnet.utilities.gaussian_expansion(
+            init_edges = gaussian_expansion(
                 sym_edges, edge_feature_expand
             )
         else:
@@ -365,11 +413,11 @@ class DensityMsgPassing:
                     mean_messages=avg_msg,
                 )
             with tf.variable_scope("update" + scope_suffix, reuse=reuse):
-                hidden_state += msgnet.defaults.mlp(
+                hidden_state += mlp(
                     sum_msg,
                     [hidden_state_len, hidden_state_len],
-                    activation=msgnet.defaults.nonlinearity,
-                    weights_initializer=msgnet.defaults.initializer,
+                    activation=nonlinearity,
+                    weights_initializer=initializer,
                 )
                 hidden_states_list.append(hidden_state)
             with tf.variable_scope("edge_update" + scope_suffix, reuse=reuse):
@@ -391,7 +439,7 @@ class DensityMsgPassing:
 
         probe_edges = sym_probe_dist
         if edge_feature_expand is not None:
-            probe_edges = msgnet.utilities.gaussian_expansion(
+            probe_edges = gaussian_expansion(
                 probe_edges, edge_feature_expand
             )
         for i in range(num_passes):
@@ -414,18 +462,18 @@ class DensityMsgPassing:
                     mean_messages=avg_msg,
                 )
             with tf.variable_scope("probe_update" + scope_suffix, reuse=reuse):
-                gates = msgnet.defaults.mlp(
+                gates = mlp(
                     probe_state,
                     [hidden_state_len, hidden_state_len],
-                    activation=msgnet.defaults.nonlinearity,
+                    activation=nonlinearity,
                     last_activation=tf.sigmoid,
-                    weights_initializer=msgnet.defaults.initializer,
+                    weights_initializer=initializer,
                 )
-                probe_state = probe_state*gates + (1.-gates)*msgnet.defaults.mlp(
+                probe_state = probe_state*gates + (1.-gates)*mlp(
                     sum_msg,
                     [hidden_state_len, hidden_state_len],
-                    activation=msgnet.defaults.nonlinearity,
-                    weights_initializer=msgnet.defaults.initializer,
+                    activation=nonlinearity,
+                    weights_initializer=initializer,
                 )
             #with tf.variable_scope("probe_edge_update" + scope_suffix, reuse=reuse):
                 #if use_edge_updates and (i < (num_passes - 1)):
@@ -443,11 +491,11 @@ class DensityMsgPassing:
 
         self.nodes_out = probe_state
         # Readout probe_state
-        density = msgnet.defaults.mlp(
+        density = mlp(
             probe_state,
             [hidden_state_len, hidden_state_len, hidden_state_len, 1],
-            activation=msgnet.defaults.nonlinearity,
-            weights_initializer=msgnet.defaults.initializer,
+            activation=nonlinearity,
+            weights_initializer=initializer,
         )
 
         if single_atom_reference_dir is not None:
