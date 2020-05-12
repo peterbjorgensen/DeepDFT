@@ -1,253 +1,273 @@
-import sys
-import collections
-import argparse
 import os
-import timeit
-import logging
+import sys
 import json
-import ase
-import ase.io
-import tensorflow as tf
+import argparse
+import math
+import logging
+import itertools
+
 import numpy as np
-import densitymsg
-from densityloader import ChargeDataLoader, LazyChargeDataLoader
-from densityhandler import DensityDataHandler
-from trainer import DensityOutputTrainer
-from ase.neighborlist import NeighborList
+import torch
+
+import densitymodel
+import dataset
+
 
 def get_arguments(arg_list=None):
     parser = argparse.ArgumentParser(
-        description="Train graph convolution network", fromfile_prefix_chars="@"
+        description="Train graph convolution network", fromfile_prefix_chars="+"
     )
-    parser.add_argument("--load_model", type=str, default=None)
-    parser.add_argument("--start_step", type=int, default=None)
-    parser.add_argument("--probe_count", type=int, default=1000)
-    parser.add_argument("--dataset", type=str, default=None)
-    parser.add_argument("--learning_rate", type=float, default=1e-4)
-    parser.add_argument("--use_train_queue", action="store_true")
-    parser.add_argument("--use_lazy_loader", action="store_true")
-    parser.add_argument("--cutoff", type=float, default=5.0)
-    parser.add_argument("--split_file", type=str, default=None)
+    parser.add_argument(
+        "--load_model",
+        type=str,
+        default=None,
+        help="Load model parameters from previous run",
+    )
+    parser.add_argument(
+        "--cutoff",
+        type=float,
+        default=5.0,
+        help="Atomic interaction cutoff distance [Å]",
+    )
+    parser.add_argument(
+        "--split_file",
+        type=str,
+        default=None,
+        help="Train/test/validation split file json",
+    )
+    parser.add_argument(
+        "--num_interactions",
+        type=int,
+        default=3,
+        help="Number of interaction layers used",
+    )
+    parser.add_argument(
+        "--node_size", type=int, default=64, help="Size of hidden node states"
+    )
+    parser.add_argument(
+        "--output_dir",
+        type=str,
+        default="runs/model_output",
+        help="Path to output directory",
+    )
+    parser.add_argument(
+        "--dataset", type=str, default="data/qm9.db", help="Path to ASE database",
+    )
+    parser.add_argument(
+        "--max_steps",
+        type=int,
+        default=int(1e6),
+        help="Maximum number of optimisation steps",
+    )
+    parser.add_argument(
+        "--device",
+        type=str,
+        default="cuda",
+        help="Set which device to use for training e.g. 'cuda' or 'cpu'",
+    )
 
     return parser.parse_args(arg_list)
 
-def gen_prefix(namespace):
-    prefix = []
-    argdict = vars(namespace)
-    for key in [
-        "cutoff",
-        "learning_rate",
-    ]:
-        if isinstance(argdict[key], list):
-            val = "-".join([str(x) for x in argdict[key]])
-        else:
-            val = str(argdict[key])
-        prefix.append(key[0] + val)
-    return "_".join(prefix).replace(" ", "")
 
-def get_model(cutoff):
-    embedding_size = 256
-
-    model = densitymsg.DensityMsgPassing(
-        embedding_shape=(len(ase.data.chemical_symbols), embedding_size),
-        edge_feature_expand=[(0, 0.01, cutoff+1)],
-        use_edge_updates=False,
-        num_passes=6,
-        hard_cutoff=cutoff,
-        single_atom_reference_dir=os.path.join(os.path.dirname(os.path.abspath(__file__)), "single_atom_reference/"),
-        )
-
-    return model
-
-def split_by_file(filename, graph_objects):
-    with open(filename, "r") as f:
-        split_dict = json.load(f)
-
-    splits = collections.defaultdict(list)
-
-    for i, obj in enumerate(graph_objects):
-        for key, val in split_dict.items():
-            if i in val:
-                splits[key].append(obj)
-            elif hasattr(obj, "member") and obj.member.name in val:
-                splits[key].append(obj)
-            elif hasattr(obj, "filename") and obj.filename in val:
-                splits[key].append(obj)
-
-    return splits
-
-def train_model(args, logs_path):
-    if args.use_lazy_loader:
-        LoaderClass = LazyChargeDataLoader
-    else:
-        LoaderClass = ChargeDataLoader
-
-    if args.dataset.endswith(".txt"):
-        # Text file contains list of datafiles
-        with open(args.dataset, "r") as datasetfiles:
-            filelist = [os.path.join(os.path.dirname(args.dataset), line.strip('\n')) for line in datasetfiles]
-    else:
-        filelist = [args.dataset]
-
-    graph_obj_list = []
-    for i, filename in enumerate(filelist):
-        logging.debug("loading file %d/%d: %s" % (i+1, len(filelist), filename))
-        densityloader = LoaderClass(filename, args.cutoff)
-        graph_obj_list.extend(densityloader.load())
-
-
+def split_data(dataset, args):
+    # Load or generate splits
     if args.split_file:
-        splits = split_by_file(args.split_file, graph_obj_list)
-        if "train" in splits:
-            train_handler = DensityDataHandler(splits["train"], preprocessing_probe_count=args.probe_count)
-        if "validation" in splits:
-            validation_handler = DensityDataHandler(splits["validation"], preprocessing_probe_count=args.probe_count)
+        with open(args.split_file, "r") as fp:
+            splits = json.load(fp)
     else:
-        data_handler = DensityDataHandler(graph_obj_list, preprocessing_probe_count=args.probe_count)
-        train_handler, _, validation_handler = data_handler.train_test_split(split_type="count", validation_size=10, test_size=10)
+        datalen = len(dataset)
+        num_validation = int(math.ceil(datalen * 0.10))
+        indices = np.random.permutation(len(dataset))
+        splits = {
+            "train": indices[num_validation:].tolist(),
+            "validation": indices[:num_validation].tolist(),
+        }
 
-    if args.use_train_queue:
-        train_handler.setup_train_queue()
-        num_samples_train_metric = 10
-        train_metrics_handler = DensityDataHandler([train_handler.graph_objects[i].decompress() for i in np.random.permutation(len(train_handler))[0:num_samples_train_metric]], preprocessing_probe_count=args.probe_count)
-        validation_handler.graph_objects = [g.decompress() for g in validation_handler.graph_objects]
-    else:
-        train_metrics_handler = train_handler
-        validation_handler.graph_objects = [g.decompress() for g in validation_handler.graph_objects]
-        train_handler.graph_objects = [g.decompress() for g in train_handler.graph_objects]
+    # Save split file
+    with open(os.path.join(args.output_dir, "datasplits.json"), "w") as f:
+        json.dump(splits, f)
+
+    # Split the dataset
+    datasplits = {}
+    for key, indices in splits.items():
+        datasplits[key] = torch.utils.data.Subset(dataset, indices)
+    return datasplits
 
 
-    batch_size = 1
+def eval_model(model, dataloader, device):
+    running_ae = 0
+    running_se = 0
+    running_count = 0
+    for batch in dataloader:
+        device_batch = {
+            k: v.to(device=device, non_blocking=True) for k, v in batch.items()
+        }
+        with torch.no_grad():
+            outputs = model(device_batch).detach().cpu().numpy()
+        targets = batch["probe_target"].detach().cpu().numpy()
 
-    model = get_model(args.cutoff)
+        running_ae += np.sum(np.abs(targets - outputs))
+        running_se += np.sum(np.square(targets - outputs))
+        running_count += torch.prod(batch["num_probes"]).detach().cpu().numpy()
 
-    trainer = DensityOutputTrainer(model, train_handler, batch_size=batch_size, initial_lr=args.learning_rate)
+    mae = running_ae / running_count
+    rmse = np.sqrt(running_se / running_count)
 
-    model.init_saver() # Be re-initializing the saver, we also save trainer parameters
+    return mae, rmse
 
-    num_steps = int(5e7)
-    log_interval = 10000
 
-    best_val_mae = np.inf
-    best_val_step = 0
+def get_normalization(dataset, per_atom=True):
+    try:
+        num_targets = len(dataset.transformer.targets)
+    except AttributeError:
+        num_targets = 1
+    x_sum = torch.zeros(num_targets)
+    x_2 = torch.zeros(num_targets)
+    num_objects = 0
+    for sample in dataset:
+        x = sample["targets"]
+        if per_atom:
+            x = x / sample["num_nodes"]
+        x_sum += x
+        x_2 += x ** 2.0
+        num_objects += 1
+    # Var(X) = E[X^2] - E[X]^2
+    x_mean = x_sum / num_objects
+    x_var = x_2 / num_objects - x_mean ** 2.0
 
-    start_time = timeit.default_timer()
+    return x_mean, torch.sqrt(x_var)
 
-    with tf.Session() as sess:
-        sess.run(tf.global_variables_initializer())
-
-        if args.load_model:
-            if args.load_model.endswith(".meta"):
-                checkpoint = args.load_model.replace(".meta", "")
-                logging.info("loading model from %s", checkpoint)
-                model_step = int(checkpoint.split("/")[-1].split("-")[-1])
-                model.load(sess, checkpoint)
-            else:
-                checkpoint = tf.train.get_checkpoint_state(args.load_model)
-                logging.info("loading model from %s", checkpoint)
-                model_step = int(
-                    checkpoint.model_checkpoint_path.split("/")[-1].split("-")[-1]
-                )
-                model.load(sess, checkpoint.model_checkpoint_path)
-        else:
-            model_step = 0
-
-        start_step = args.start_step if args.start_step is not None else model_step
-
-        # Print shape of all trainable variables
-        trainable_vars = tf.trainable_variables()
-        for var, val in zip(trainable_vars, sess.run(trainable_vars)):
-            logging.debug("%s %s", var.name, var.get_shape())
-
-        logging.debug("starting training")
-
-        for update_step in range(start_step, num_steps):
-            trainer.step(sess, update_step, probe_count=args.probe_count)
-
-            if (update_step % log_interval == 0) or (update_step + 1) == num_steps:
-                test_start_time = timeit.default_timer()
-
-                # Evaluate training set
-                train_metrics = trainer.evaluate_metrics(
-                    sess, train_metrics_handler, prefix="train", decimation=10000
-                )
-
-                # Evaluate validation set
-                if validation_handler:
-                    val_metrics = trainer.evaluate_metrics(sess, validation_handler, prefix="val", decimation=1000)
-                else:
-                    val_metrics = {}
-
-                all_metrics = {**train_metrics, **val_metrics}
-                metric_string = " ".join(
-                    ["%s=%f" % (key, val) for key, val in all_metrics.items()]
-                )
-
-                end_time = timeit.default_timer()
-                test_end_time = timeit.default_timer()
-                logging.info(
-                    "t=%.1f (%.1f) %d %s lr=%f",
-                    end_time - start_time,
-                    test_end_time - test_start_time,
-                    update_step,
-                    metric_string,
-                    trainer.get_learning_rate(update_step),
-                )
-                start_time = timeit.default_timer()
-
-                # Do early stopping using validation data (if available)
-                if validation_handler:
-                    if all_metrics["val_mae"] < best_val_mae:
-                        model.save(
-                            sess, logs_path + "model.ckpt", global_step=update_step
-                        )
-                        best_val_mae = all_metrics["val_mae"]
-                        best_val_step = update_step
-                        logging.info(
-                            "best_val_mae=%f, best_val_step=%d",
-                            best_val_mae,
-                            best_val_step,
-                        )
-                    if (update_step - best_val_step) > 100e6:
-                        logging.info(
-                            "best_val_mae=%f, best_val_step=%d",
-                            best_val_mae,
-                            best_val_step,
-                        )
-                        logging.info("No improvement in last 1e6 steps, stopping...")
-                        model.save(
-                            sess, logs_path + "model.ckpt", global_step=update_step
-                        )
-                        return
-                else:
-                    model.save(sess, logs_path + "model.ckpt", global_step=update_step)
 
 def main():
     args = get_arguments()
-    try:
-        basename = os.path.basename(args.dataset)
-    except:
-        basename = "."
 
-    logs_path = "logs/%s_%s/" % (basename.split(".")[0], gen_prefix(args))
-    os.makedirs(logs_path, exist_ok=True)
+    # Setup logging
+    os.makedirs(args.output_dir, exist_ok=True)
     logging.basicConfig(
         level=logging.DEBUG,
         format="%(asctime)s [%(levelname)-5.5s]  %(message)s",
         handlers=[
-            logging.FileHandler(logs_path + "printlog.txt", mode="w"),
+            logging.FileHandler(
+                os.path.join(args.output_dir, "printlog.txt"), mode="w"
+            ),
             logging.StreamHandler(),
         ],
     )
-    logging.debug("logging to %s" % logs_path)
 
-    if not args.load_model:
-        with open(logs_path + "commandline_args.txt", "w") as f:
-            f.write("\n".join(sys.argv[1:]))
+    # Save command line args
+    with open(os.path.join(args.output_dir, "commandline_args.txt"), "w") as f:
+        f.write("\n".join(sys.argv[1:]))
+    # Save parsed command line arguments
+    with open(os.path.join(args.output_dir, "arguments.json"), "w") as f:
+        json.dump(vars(args), f)
 
-    train_model(args, logs_path)
+    # Setup dataset and loader
+    logging.info("loading data %s", args.dataset)
+    densitydata = dataset.DensityData(args.dataset,)
+    densitydata = dataset.BufferData(densitydata)  # Load data into host memory
 
-    sys.exit(0)
+    # Split data into train and validation sets
+    datasplits = split_data(densitydata, args)
+
+    # Setup loaders
+    train_loader = torch.utils.data.DataLoader(
+        datasplits["train"],
+        2,
+        num_workers=0,
+        sampler=torch.utils.data.RandomSampler(datasplits["train"]),
+        collate_fn=dataset.CollateFuncRandomSample(args.cutoff, 100, pin_memory=True),
+    )
+    val_loader = torch.utils.data.DataLoader(
+        datasplits["validation"],
+        32,
+        collate_fn=dataset.CollateFuncRandomSample(args.cutoff, 100, pin_memory=False),
+        num_workers=0,
+    )
+
+    # Initialise model
+    device = torch.device(args.device)
+    net = densitymodel.DensityModel(args.num_interactions, args.node_size, args.cutoff,)
+    net = net.to(device)
+
+    # Setup optimizer
+    optimizer = torch.optim.Adam(net.parameters(), lr=0.0001)
+    criterion = torch.nn.MSELoss()
+    scheduler_fn = lambda step: 0.96 ** (step / 100000)
+    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, scheduler_fn)
+
+    log_interval = 10000
+    running_loss = 0
+    running_loss_count = 0
+    best_val_mae = np.inf
+    step = 0
+    # Restore checkpoint
+    if args.load_model:
+        state_dict = torch.load(args.load_model)
+        net.load_state_dict(state_dict["model"])
+        step = state_dict["step"]
+        best_val_mae = state_dict["best_val_mae"]
+        optimizer.load_state_dict(state_dict["optimizer"])
+        scheduler.load_state_dict(state_dict["scheduler"])
+
+    logging.info("start training")
+    for epoch in itertools.count():
+        for batch_host in train_loader:
+            # Transfer to 'device'
+            batch = {
+                k: v.to(device=device, non_blocking=True)
+                for (k, v) in batch_host.items()
+            }
+
+            # Reset gradient
+            optimizer.zero_grad()
+
+            # Forward, backward and optimize
+            outputs = net(batch)
+            loss = criterion(outputs, batch["probe_target"])
+            loss.backward()
+            optimizer.step()
+
+            loss_value = loss.item()
+            running_loss += loss_value * batch["probe_target"].shape[0]
+            running_loss_count += batch["probe_target"].shape[0]
+
+            # print(step, loss_value)
+            # Validate and save model
+            if (step % log_interval == 0) or ((step + 1) == args.max_steps):
+                train_loss = running_loss / running_loss_count
+                running_loss = running_loss_count = 0
+
+                val_mae, val_rmse = eval_model(net, val_loader, device)
+
+                logging.info(
+                    "step=%d, val_mae=%g, val_rmse=%g, sqrt(train_loss)=%g",
+                    step,
+                    val_mae,
+                    val_rmse,
+                    math.sqrt(train_loss),
+                )
+
+                # Save checkpoint
+                if val_mae < best_val_mae:
+                    best_val_mae = val_mae
+                    torch.save(
+                        {
+                            "model": net.state_dict(),
+                            "optimizer": optimizer.state_dict(),
+                            "scheduler": scheduler.state_dict(),
+                            "step": step,
+                            "best_val_mae": best_val_mae,
+                        },
+                        os.path.join(args.output_dir, "best_model.pth"),
+                    )
+            step += 1
+
+            scheduler.step()
+
+            if step >= args.max_steps:
+                logging.info("Max steps reached, exiting")
+                sys.exit(0)
+
 
 if __name__ == "__main__":
     main()

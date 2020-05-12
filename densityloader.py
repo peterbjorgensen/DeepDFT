@@ -151,7 +151,7 @@ class CompressedDataEntry():
             obj = pickle.loads(decompbytes)
         return obj
 
-def extract_vasp(tar, tarinfo, compressed=False):
+def extract_vasp(tar, tarinfo):
     # Extract compressed file
     buf = tar.extractfile(tarinfo)
     if tarinfo.name.endswith(".zz"):
