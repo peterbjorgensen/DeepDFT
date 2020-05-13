@@ -108,7 +108,7 @@ def eval_model(model, dataloader, device):
 
         running_ae += np.sum(np.abs(targets - outputs))
         running_se += np.sum(np.square(targets - outputs))
-        running_count += torch.prod(batch["num_probes"]).detach().cpu().numpy()
+        running_count += torch.sum(batch["num_probes"]).item()
 
     mae = running_ae / running_count
     rmse = np.sqrt(running_se / running_count)
@@ -164,7 +164,7 @@ def main():
     # Setup dataset and loader
     logging.info("loading data %s", args.dataset)
     densitydata = dataset.DensityData(args.dataset,)
-    densitydata = dataset.BufferData(densitydata)  # Load data into host memory
+    #densitydata = dataset.BufferData(densitydata)  # Load data into host memory
 
     # Split data into train and validation sets
     datasplits = split_data(densitydata, args)
@@ -175,12 +175,12 @@ def main():
         2,
         num_workers=0,
         sampler=torch.utils.data.RandomSampler(datasplits["train"]),
-        collate_fn=dataset.CollateFuncRandomSample(args.cutoff, 100, pin_memory=True),
+        collate_fn=dataset.CollateFuncRandomSample(args.cutoff, 1000, pin_memory=True),
     )
     val_loader = torch.utils.data.DataLoader(
         datasplits["validation"],
         32,
-        collate_fn=dataset.CollateFuncRandomSample(args.cutoff, 100, pin_memory=False),
+        collate_fn=dataset.CollateFuncRandomSample(args.cutoff, 1000, pin_memory=False),
         num_workers=0,
     )
 
@@ -228,8 +228,8 @@ def main():
             optimizer.step()
 
             loss_value = loss.item()
-            running_loss += loss_value * batch["probe_target"].shape[0]
-            running_loss_count += batch["probe_target"].shape[0]
+            running_loss += loss_value * batch["probe_target"].shape[0] * batch["probe_target"].shape[1]
+            running_loss_count += torch.sum(batch["num_probes"]).item()
 
             # print(step, loss_value)
             # Validate and save model

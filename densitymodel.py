@@ -177,7 +177,7 @@ class AtomRepresentationModel(nn.Module):
         # Setup interaction networks
         self.interactions = nn.ModuleList(
             [
-                layer.Interaction(hidden_state_size, edge_size, self.cutoff)
+                layer.Interaction(hidden_state_size, edge_size, self.cutoff, include_receiver=True)
                 for _ in range(num_interactions)
             ]
         )

@@ -201,8 +201,8 @@ class MessageSum(nn.Module):
                 receivers = receiver_nodes[edges[:, 1]]
                 nodes = torch.cat((senders, receivers), dim=1)
             else:
-                num_nodes = node_state.shape[0]
-                nodes = torch.reshape(node_state[edges], (num_nodes, -1))
+                num_edges = edges.shape[0]
+                nodes = torch.reshape(node_state[edges], (num_edges, -1))
         else:
             nodes = node_state[edges[:, 0]]  # Only include sender in messages
         messages = self.message_function(nodes, edge_state, edges_distance)

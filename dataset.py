@@ -61,6 +61,29 @@ class DensityData(torch.utils.data.Dataset):
     def __getitem__(self, index):
         return self.extract_member(self.member_list[index])
 
+class AseNeigborListWrapper:
+    """
+    Wrapper around ASE neighborlist to have the same interface as asap3 neighborlist
+
+    """
+    def __init__(self, cutoff, atoms):
+        self.neighborlist = ase.neighborlist.NewPrimitiveNeighborList(cutoff, skin=0.0, self_interaction=False, bothways=True)
+        self.neighborlist.build(atoms.get_pbc(), atoms.get_cell(), atoms.get_positions())
+        self.cutoff = cutoff
+        self.atoms_positions = atoms.get_positions()
+        self.atoms_cell = atoms.get_cell()
+
+    def get_neighbors(self, i, cutoff):
+        assert cutoff == self.cutoff, "Cutoff must be the same as used to initialise the neighborlist"
+
+        indices, offsets = self.neighborlist.get_neighbors(i)
+
+        rel_positions = self.atoms_positions[indices] + offsets @ self.atoms_cell - self.atoms_positions[i][None]
+
+        dist2 = np.sum(np.square(rel_positions), axis=1)
+
+        return indices, rel_positions, dist2
+
 
 def atoms_to_graph_wprobes(density, atoms, grid_pos, cutoff, num_probes):
 
@@ -83,6 +106,9 @@ def atoms_to_graph_wprobes(density, atoms, grid_pos, cutoff, num_probes):
     probe_edges_features = []
 
     # Compute neighborlist
+    #if np.any(atoms.get_cell().lengths() <= 0.0001) or (np.any(atoms.get_pbc()) and np.any(atoms.get_cell().lengths() < cutoff)):
+    #    neighborlist = AseNeigborListWrapper(cutoff, atoms_with_probes)
+    #else:
     neighborlist = asap3.FullNeighborList(cutoff, atoms_with_probes)
     atomic_numbers = atoms_with_probes.get_atomic_numbers()
     for i in range(len(atoms_with_probes)):
