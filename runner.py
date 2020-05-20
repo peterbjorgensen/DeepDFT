@@ -5,6 +5,7 @@ import argparse
 import math
 import logging
 import itertools
+import timeit
 
 import numpy as np
 import torch
@@ -66,8 +67,36 @@ def get_arguments(arg_list=None):
         help="Set which device to use for training e.g. 'cuda' or 'cpu'",
     )
 
+    parser.add_argument(
+        "--ignore_pbc",
+        action="store_true",
+        help="If flag is given, ignore periodic boundary conditions in atoms data",
+    )
+
     return parser.parse_args(arg_list)
 
+class AverageMeter(object):
+    """Computes and stores the average and current value"""
+    def __init__(self, name, fmt=':f'):
+        self.name = name
+        self.fmt = fmt
+        self.reset()
+
+    def reset(self):
+        self.val = 0
+        self.avg = 0
+        self.sum = 0
+        self.count = 0
+
+    def update(self, val, n=1):
+        self.val = val
+        self.sum += val * n
+        self.count += n
+        self.avg = self.sum / self.count
+
+    def __str__(self):
+        fmtstr = '{name} {val' + self.fmt + '} ({avg' + self.fmt + '})'
+        return fmtstr.format(**self.__dict__)
 
 def split_data(dataset, args):
     # Load or generate splits
@@ -76,7 +105,7 @@ def split_data(dataset, args):
             splits = json.load(fp)
     else:
         datalen = len(dataset)
-        num_validation = int(math.ceil(datalen * 0.10))
+        num_validation = int(math.ceil(datalen * 0.05))
         indices = np.random.permutation(len(dataset))
         splits = {
             "train": indices[num_validation:].tolist(),
@@ -95,23 +124,23 @@ def split_data(dataset, args):
 
 
 def eval_model(model, dataloader, device):
-    running_ae = 0
-    running_se = 0
-    running_count = 0
-    for batch in dataloader:
-        device_batch = {
-            k: v.to(device=device, non_blocking=True) for k, v in batch.items()
-        }
-        with torch.no_grad():
-            outputs = model(device_batch).detach().cpu().numpy()
-        targets = batch["probe_target"].detach().cpu().numpy()
+    with torch.no_grad():
+        running_ae = torch.tensor(0., device=device)
+        running_se = torch.tensor(0., device=device)
+        running_count = torch.tensor(0., device=device)
+        for batch in dataloader:
+            device_batch = {
+                k: v.to(device=device, non_blocking=True) for k, v in batch.items()
+            }
+            outputs = model(device_batch)
+            targets = device_batch["probe_target"]
 
-        running_ae += np.sum(np.abs(targets - outputs))
-        running_se += np.sum(np.square(targets - outputs))
-        running_count += torch.sum(batch["num_probes"]).item()
+            running_ae += torch.sum(torch.abs(targets - outputs))
+            running_se += torch.sum(torch.square(targets - outputs))
+            running_count += torch.sum(device_batch["num_probes"])
 
-    mae = running_ae / running_count
-    rmse = np.sqrt(running_se / running_count)
+        mae = (running_ae / running_count).item()
+        rmse = (torch.sqrt(running_se / running_count)).item()
 
     return mae, rmse
 
@@ -164,25 +193,27 @@ def main():
     # Setup dataset and loader
     logging.info("loading data %s", args.dataset)
     densitydata = dataset.DensityData(args.dataset,)
-    #densitydata = dataset.BufferData(densitydata)  # Load data into host memory
 
     # Split data into train and validation sets
     datasplits = split_data(densitydata, args)
+    datasplits["train"] = dataset.RotatingPoolData(datasplits["train"], 20)
 
     # Setup loaders
     train_loader = torch.utils.data.DataLoader(
         datasplits["train"],
         2,
-        num_workers=0,
+        num_workers=4,
         sampler=torch.utils.data.RandomSampler(datasplits["train"]),
-        collate_fn=dataset.CollateFuncRandomSample(args.cutoff, 1000, pin_memory=True),
+        collate_fn=dataset.CollateFuncRandomSample(args.cutoff, 1000, pin_memory=False, disable_pbc=args.ignore_pbc),
     )
     val_loader = torch.utils.data.DataLoader(
         datasplits["validation"],
-        32,
-        collate_fn=dataset.CollateFuncRandomSample(args.cutoff, 1000, pin_memory=False),
+        2,
+        collate_fn=dataset.CollateFuncRandomSample(args.cutoff, 5000, pin_memory=False, disable_pbc=args.ignore_pbc),
         num_workers=0,
     )
+    logging.info("Preloading validation batch")
+    val_loader = [b for b in val_loader]
 
     # Initialise model
     device = torch.device(args.device)
@@ -195,9 +226,9 @@ def main():
     scheduler_fn = lambda step: 0.96 ** (step / 100000)
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, scheduler_fn)
 
-    log_interval = 10000
-    running_loss = 0
-    running_loss_count = 0
+    log_interval = 1000
+    running_loss = torch.tensor(0.0, device=device)
+    running_loss_count = torch.tensor(0, device=device)
     best_val_mae = np.inf
     step = 0
     # Restore checkpoint
@@ -210,14 +241,25 @@ def main():
         scheduler.load_state_dict(state_dict["scheduler"])
 
     logging.info("start training")
+
+    data_timer = AverageMeter("data_timer")
+    transfer_timer = AverageMeter("transfer_timer")
+    train_timer = AverageMeter("train_timer")
+    eval_timer = AverageMeter("eval_time")
+
+    endtime = timeit.default_timer()
     for epoch in itertools.count():
         for batch_host in train_loader:
+            data_timer.update(timeit.default_timer()-endtime)
+            tstart = timeit.default_timer()
             # Transfer to 'device'
             batch = {
                 k: v.to(device=device, non_blocking=True)
                 for (k, v) in batch_host.items()
             }
+            transfer_timer.update(timeit.default_timer()-tstart)
 
+            tstart = timeit.default_timer()
             # Reset gradient
             optimizer.zero_grad()
 
@@ -227,15 +269,19 @@ def main():
             loss.backward()
             optimizer.step()
 
-            loss_value = loss.item()
-            running_loss += loss_value * batch["probe_target"].shape[0] * batch["probe_target"].shape[1]
-            running_loss_count += torch.sum(batch["num_probes"]).item()
+            with torch.no_grad():
+                running_loss += loss * batch["probe_target"].shape[0] * batch["probe_target"].shape[1]
+                running_loss_count += torch.sum(batch["num_probes"])
+
+            train_timer.update(timeit.default_timer()-tstart)
 
             # print(step, loss_value)
             # Validate and save model
             if (step % log_interval == 0) or ((step + 1) == args.max_steps):
-                train_loss = running_loss / running_loss_count
-                running_loss = running_loss_count = 0
+                tstart = timeit.default_timer()
+                with torch.no_grad():
+                    train_loss = (running_loss / running_loss_count).item()
+                    running_loss = running_loss_count = 0
 
                 val_mae, val_rmse = eval_model(net, val_loader, device)
 
@@ -260,6 +306,11 @@ def main():
                         },
                         os.path.join(args.output_dir, "best_model.pth"),
                     )
+
+                eval_timer.update(timeit.default_timer()-tstart)
+                logging.debug(
+                    "%s %s %s %s" % (data_timer, transfer_timer, train_timer, eval_timer)
+                )
             step += 1
 
             scheduler.step()
@@ -267,6 +318,8 @@ def main():
             if step >= args.max_steps:
                 logging.info("Max steps reached, exiting")
                 sys.exit(0)
+
+            endtime = timeit.default_timer()
 
 
 if __name__ == "__main__":

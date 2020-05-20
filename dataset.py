@@ -1,17 +1,71 @@
 from typing import List
 import tarfile
+import multiprocessing
+import threading
+import logging
 import zlib
 import os
 import io
 import torch
 import lz4.frame
 import numpy as np
+import numpy.random
 import ase
 import ase.io.cube
 from ase.calculators.vasp import VaspChargeDensity
 import asap3
 
 from layer import pad_and_stack
+
+
+def rotating_pool_worker(dataset, rng, queue):
+    while True:
+        for index in rng.permutation(len(dataset)):
+            queue.put(dataset[index])
+
+
+def transfer_thread(queue: multiprocessing.Queue, datalist: list):
+    while True:
+        for index in range(len(datalist)):
+            datalist[index] = queue.get()
+
+
+class RotatingPoolData(torch.utils.data.Dataset):
+    """
+    Wrapper for a dataset that continously loads data into a smaller pool.
+    The data loading is performed in a separate process and is assumed to be IO bound.
+    """
+
+    def __init__(self, dataset, pool_size, **kwargs):
+        super().__init__(**kwargs)
+        self.pool_size = pool_size
+        self.parent_data = dataset
+        self.rng = np.random.default_rng()
+        logging.debug("Filling rotating data pool of size %d" % pool_size)
+        self.data_pool = [
+            self.parent_data[i]
+            for i in self.rng.integers(
+                0, high=len(self.parent_data), size=self.pool_size, endpoint=False
+            )
+        ]
+        self.loader_queue = multiprocessing.Queue(2)
+
+        # Start loaders
+        self.loader_process = multiprocessing.Process(
+            target=rotating_pool_worker,
+            args=(self.parent_data, self.rng, self.loader_queue),
+        )
+        self.transfer_thread = threading.Thread(
+            target=transfer_thread, args=(self.loader_queue, self.data_pool)
+        )
+        self.loader_process.start()
+        self.transfer_thread.start()
+
+    def __len__(self):
+        return self.pool_size
+
+    def __getitem__(self, index):
+        return self.data_pool[index]
 
 
 class BufferData(torch.utils.data.Dataset):
@@ -56,29 +110,46 @@ class DensityData(torch.utils.data.Dataset):
                 density, atoms, origin = _extract_vasp(tar, tarinfo)
 
         grid_pos = _calculate_grid_pos(density, origin, atoms.get_cell())
-        return {"density": density, "atoms": atoms, "origin": origin, "grid_position": grid_pos}
+        return {
+            "density": density,
+            "atoms": atoms,
+            "origin": origin,
+            "grid_position": grid_pos,
+        }
 
     def __getitem__(self, index):
         return self.extract_member(self.member_list[index])
+
 
 class AseNeigborListWrapper:
     """
     Wrapper around ASE neighborlist to have the same interface as asap3 neighborlist
 
     """
+
     def __init__(self, cutoff, atoms):
-        self.neighborlist = ase.neighborlist.NewPrimitiveNeighborList(cutoff, skin=0.0, self_interaction=False, bothways=True)
-        self.neighborlist.build(atoms.get_pbc(), atoms.get_cell(), atoms.get_positions())
+        self.neighborlist = ase.neighborlist.NewPrimitiveNeighborList(
+            cutoff, skin=0.0, self_interaction=False, bothways=True
+        )
+        self.neighborlist.build(
+            atoms.get_pbc(), atoms.get_cell(), atoms.get_positions()
+        )
         self.cutoff = cutoff
         self.atoms_positions = atoms.get_positions()
         self.atoms_cell = atoms.get_cell()
 
     def get_neighbors(self, i, cutoff):
-        assert cutoff == self.cutoff, "Cutoff must be the same as used to initialise the neighborlist"
+        assert (
+            cutoff == self.cutoff
+        ), "Cutoff must be the same as used to initialise the neighborlist"
 
         indices, offsets = self.neighborlist.get_neighbors(i)
 
-        rel_positions = self.atoms_positions[indices] + offsets @ self.atoms_cell - self.atoms_positions[i][None]
+        rel_positions = (
+            self.atoms_positions[indices]
+            + offsets @ self.atoms_cell
+            - self.atoms_positions[i][None]
+        )
 
         dist2 = np.sum(np.square(rel_positions), axis=1)
 
@@ -106,10 +177,10 @@ def atoms_to_graph_wprobes(density, atoms, grid_pos, cutoff, num_probes):
     probe_edges_features = []
 
     # Compute neighborlist
-    #if np.any(atoms.get_cell().lengths() <= 0.0001) or (np.any(atoms.get_pbc()) and np.any(atoms.get_cell().lengths() < cutoff)):
-    #    neighborlist = AseNeigborListWrapper(cutoff, atoms_with_probes)
-    #else:
-    neighborlist = asap3.FullNeighborList(cutoff, atoms_with_probes)
+    if np.any(atoms.get_cell().lengths() <= 0.0001) or (np.any(atoms.get_pbc()) and np.any(atoms.get_cell().lengths() < cutoff)):
+       neighborlist = AseNeigborListWrapper(cutoff, atoms_with_probes)
+    else:
+        neighborlist = asap3.FullNeighborList(cutoff, atoms_with_probes)
     atomic_numbers = atoms_with_probes.get_atomic_numbers()
     for i in range(len(atoms_with_probes)):
         neigh_idx, _, neigh_dist2 = neighborlist.get_neighbors(i, cutoff)
@@ -134,12 +205,17 @@ def atoms_to_graph_wprobes(density, atoms, grid_pos, cutoff, num_probes):
             probe_edges_features.append(neigh_dist[neigh_is_atom])
 
     default_type = torch.get_default_dtype()
+    # pylint: disable=E1102
     res = {
         "nodes": torch.tensor(nodes),
         "atom_edges": torch.tensor(np.concatenate(atom_edges, axis=0)),
-        "atom_edges_features": torch.tensor(np.concatenate(atom_edges_features, axis=0)[:, None], dtype=default_type),
+        "atom_edges_features": torch.tensor(
+            np.concatenate(atom_edges_features, axis=0)[:, None], dtype=default_type
+        ),
         "probe_edges": torch.tensor(np.concatenate(probe_edges, axis=0)),
-        "probe_edges_features": torch.tensor(np.concatenate(probe_edges_features, axis=0)[:, None], dtype=default_type),
+        "probe_edges_features": torch.tensor(
+            np.concatenate(probe_edges_features, axis=0)[:, None], dtype=default_type
+        ),
         "probe_target": torch.tensor(probe_target, dtype=default_type),
     }
     res["num_nodes"] = torch.tensor(res["nodes"].shape[0])
@@ -151,18 +227,28 @@ def atoms_to_graph_wprobes(density, atoms, grid_pos, cutoff, num_probes):
 
 
 class CollateFuncRandomSample:
-    def __init__(self, cutoff, num_probes, pin_memory=True):
+    def __init__(self, cutoff, num_probes, pin_memory=True, disable_pbc=False):
         self.num_probes = num_probes
         self.cutoff = cutoff
         self.pin_memory = pin_memory
+        self.disable_pbc = disable_pbc
 
     def __call__(self, input_dicts: List):
-        graphs = [
-            atoms_to_graph_wprobes(
-                i["density"], i["atoms"], i["grid_position"], self.cutoff, self.num_probes
-            )
-            for i in input_dicts
-        ]
+        graphs = []
+        for i in input_dicts:
+            if self.disable_pbc:
+                atoms = i["atoms"].copy()
+                atoms.set_pbc(False)
+            else:
+                atoms = i["atoms"]
+
+            graphs.append(atoms_to_graph_wprobes(
+                i["density"],
+                atoms,
+                i["grid_position"],
+                self.cutoff,
+                self.num_probes,
+            ))
 
         # Convert from "list of dicts" to "dict of lists"
         dict_of_lists = {k: [dic[k] for dic in graphs] for k in graphs[0]}

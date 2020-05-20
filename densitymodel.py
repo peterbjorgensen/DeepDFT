@@ -151,6 +151,7 @@ class ProbeMessageModel(nn.Module):
         probe_output = self.readout_function(probe_state).squeeze(1)
         probe_output = layer.pad_and_stack(
             torch.split(probe_output, list(input_dict["num_probes"].detach().cpu().numpy()), dim=0)
+            #probe_output.reshape((-1, input_dict["num_probes"][0]))
         )
         return probe_output
 
