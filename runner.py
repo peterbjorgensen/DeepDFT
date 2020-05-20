@@ -191,8 +191,15 @@ def main():
         json.dump(vars(args), f)
 
     # Setup dataset and loader
+    if args.dataset.endswith(".txt"):
+    # Text file contains list of datafiles
+        with open(args.dataset, "r") as datasetfiles:
+            filelist = [os.path.join(os.path.dirname(args.dataset), line.strip('\n')) for line in datasetfiles]
+    else:
+        filelist = [args.dataset]
+
     logging.info("loading data %s", args.dataset)
-    densitydata = dataset.DensityData(args.dataset,)
+    densitydata = torch.utils.data.ConcatDataset([dataset.DensityData(path) for path in filelist])
 
     # Split data into train and validation sets
     datasplits = split_data(densitydata, args)
