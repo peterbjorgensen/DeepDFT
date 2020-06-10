@@ -112,9 +112,9 @@ def split_data(dataset, args):
             "validation": indices[:num_validation].tolist(),
         }
 
-    # Save split file
-    with open(os.path.join(args.output_dir, "datasplits.json"), "w") as f:
-        json.dump(splits, f)
+        # Save split file
+        with open(os.path.join(args.output_dir, "datasplits.json"), "w") as f:
+            json.dump(splits, f)
 
     # Split the dataset
     datasplits = {}

@@ -6,10 +6,10 @@ import logging
 import zlib
 import os
 import io
+import math
 import torch
 import lz4.frame
 import numpy as np
-import numpy.random
 import ase
 import ase.io.cube
 from ase.calculators.vasp import VaspChargeDensity
@@ -110,11 +110,14 @@ class DensityData(torch.utils.data.Dataset):
                 density, atoms, origin = _extract_vasp(tar, tarinfo)
 
         grid_pos = _calculate_grid_pos(density, origin, atoms.get_cell())
+
+        metadata = {"filename": tarinfo.name}
         return {
             "density": density,
             "atoms": atoms,
             "origin": origin,
             "grid_position": grid_pos,
+            "metadata": metadata, # Meta information
         }
 
     def __getitem__(self, index):
@@ -156,21 +159,59 @@ class AseNeigborListWrapper:
         return indices, rel_positions, dist2
 
 
-def atoms_to_graph_wprobes(density, atoms, grid_pos, cutoff, num_probes):
+class DensityGridIterator:
+    def __init__(self, densitydict, ignore_pbc: bool, probe_count: int, cutoff: float):
+        self.densitydict = densitydict
 
-    # Sample probes on the calculated grid
-    probe_choice_max = np.prod(grid_pos.shape[0:3])
-    probe_choice = np.random.randint(probe_choice_max, size=num_probes)
-    probe_choice = np.unravel_index(probe_choice, grid_pos.shape[0:3])
-    probe_pos = grid_pos[probe_choice]
-    probe_target = density[probe_choice]
+        self.num_positions = np.prod(self.densitydict["grid_position"].shape[0:3])
+        self.num_slices = int(math.ceil(self.num_positions / probe_count))
+        self.probe_count = probe_count
+        self.cutoff = cutoff
 
+    def get_slice(self, slice_index):
+        flat_index = np.arange(slice_index*self.probe_count, min((slice_index+1)*self.probe_count, self.num_positions))
+        pos_index = np.unravel_index(flat_index, self.densitydict["grid_position"].shape[0:3])
+        target_density = self.densitydict["density"][pos_index]
+        probe_pos = self.densitydict["grid_position"][pos_index]
+        _, _, probe_edges, probe_edges_features = atoms_and_probes_to_graph(self.densitydict["atoms"], probe_pos, self.cutoff)
+
+        if not probe_edges:
+            probe_edges = [np.zeros((0,2), dtype=np.int)]
+            probe_edges_features = [np.zeros((0,), dtype=np.int)]
+
+        # pylint: disable=E1102
+        default_type = torch.get_default_dtype()
+        res = {
+            "probe_edges": torch.tensor(np.concatenate(probe_edges, axis=0)),
+            "probe_edges_features": torch.tensor(
+                np.concatenate(probe_edges_features, axis=0)[:, None], dtype=default_type
+            ),
+        }
+        res["num_probe_edges"] = torch.tensor(res["probe_edges"].shape[0])
+        res["num_probes"] = torch.tensor(len(flat_index))
+
+        return res
+
+    def __iter__(self):
+        self.current_slice = 0
+        return self
+
+    def __next__(self):
+        if self.current_slice < self.num_slices:
+            this_slice = self.current_slice
+            self.current_slice += 1
+            return self.get_slice(this_slice)
+        else:
+            raise StopIteration
+
+
+def atoms_and_probes_to_graph(atoms, probe_pos, cutoff):
     # Insert probe atoms
+    num_probes = probe_pos.shape[0]
     probe_atoms = ase.Atoms(numbers=[0] * num_probes, positions=probe_pos)
     atoms_with_probes = atoms.copy()
     atoms_with_probes.extend(probe_atoms)
 
-    nodes = atoms.get_atomic_numbers()
     atom_edges = []
     atom_edges_features = []
     probe_edges = []
@@ -204,7 +245,25 @@ def atoms_to_graph_wprobes(density, atoms, grid_pos, cutoff, num_probes):
             probe_edges.append(edges)
             probe_edges_features.append(neigh_dist[neigh_is_atom])
 
+    return atom_edges, atom_edges_features, probe_edges, probe_edges_features
+
+def atoms_and_probe_sample_to_graph(density, atoms, grid_pos, cutoff, num_probes):
+    nodes = atoms.get_atomic_numbers()
+
+    # Sample probes on the calculated grid
+    probe_choice_max = np.prod(grid_pos.shape[0:3])
+    probe_choice = np.random.randint(probe_choice_max, size=num_probes)
+    probe_choice = np.unravel_index(probe_choice, grid_pos.shape[0:3])
+    probe_pos = grid_pos[probe_choice]
+    probe_target = density[probe_choice]
+
+    atom_edges, atom_edges_features, probe_edges, probe_edges_features = atoms_and_probes_to_graph(atoms, probe_pos, cutoff)
+
     default_type = torch.get_default_dtype()
+
+    if not probe_edges:
+        probe_edges = [np.zeros((0,2), dtype=np.int)]
+        probe_edges_features = [np.zeros((0,), dtype=np.int)]
     # pylint: disable=E1102
     res = {
         "nodes": torch.tensor(nodes),
@@ -225,6 +284,18 @@ def atoms_to_graph_wprobes(density, atoms, grid_pos, cutoff, num_probes):
 
     return res
 
+def collate_list_of_dicts(list_of_dicts, pin_memory=False):
+    # Convert from "list of dicts" to "dict of lists"
+    dict_of_lists = {k: [dic[k] for dic in list_of_dicts] for k in list_of_dicts[0]}
+
+    # Convert each list of tensors to single tensor with pad and stack
+    if pin_memory:
+        pin = lambda x: x.pin_memory()
+    else:
+        pin = lambda x: x
+
+    collated = {k: pin(pad_and_stack(dict_of_lists[k])) for k in dict_of_lists}
+    return collated
 
 class CollateFuncRandomSample:
     def __init__(self, cutoff, num_probes, pin_memory=True, disable_pbc=False):
@@ -242,7 +313,7 @@ class CollateFuncRandomSample:
             else:
                 atoms = i["atoms"]
 
-            graphs.append(atoms_to_graph_wprobes(
+            graphs.append(atoms_and_probe_sample_to_graph(
                 i["density"],
                 atoms,
                 i["grid_position"],
@@ -250,17 +321,7 @@ class CollateFuncRandomSample:
                 self.num_probes,
             ))
 
-        # Convert from "list of dicts" to "dict of lists"
-        dict_of_lists = {k: [dic[k] for dic in graphs] for k in graphs[0]}
-
-        # Convert each list of tensors to single tensor with pad and stack
-        if self.pin_memory:
-            pin = lambda x: x.pin_memory()
-        else:
-            pin = lambda x: x
-
-        collated = {k: pin(pad_and_stack(dict_of_lists[k])) for k in dict_of_lists}
-        return collated
+        return collate_list_of_dicts(graphs, pin_memory=self.pin_memory)
 
 
 def _calculate_grid_pos(density, origin, cell):
