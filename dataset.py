@@ -1,6 +1,8 @@
 from typing import List
 import tarfile
 import multiprocessing
+import queue
+import time
 import threading
 import logging
 import zlib
@@ -159,21 +161,45 @@ class AseNeigborListWrapper:
         return indices, rel_positions, dist2
 
 
+def grid_iterator_worker(densitydict, probe_count, cutoff, ignore_pbc, slice_id_queue, result_queue):
+    while True:
+        try:
+            slice_id = slice_id_queue.get()
+        except queue.Empty:
+            while not result_queue.empty():
+                time.sleep(1)
+            print("grid worker quitting")
+            result_queue.close()
+            return 0
+        res = DensityGridIterator.static_get_slice(slice_id, densitydict, probe_count, cutoff, ignore_pbc)
+        result_queue.put((slice_id, res))
+
 class DensityGridIterator:
     def __init__(self, densitydict, ignore_pbc: bool, probe_count: int, cutoff: float):
         self.densitydict = densitydict
 
-        self.num_positions = np.prod(self.densitydict["grid_position"].shape[0:3])
-        self.num_slices = int(math.ceil(self.num_positions / probe_count))
+        num_positions = np.prod(densitydict["grid_position"].shape[0:3])
+        self.num_slices = int(math.ceil(num_positions / probe_count))
         self.probe_count = probe_count
         self.cutoff = cutoff
+        self.ignore_pbc = ignore_pbc
 
     def get_slice(self, slice_index):
-        flat_index = np.arange(slice_index*self.probe_count, min((slice_index+1)*self.probe_count, self.num_positions))
-        pos_index = np.unravel_index(flat_index, self.densitydict["grid_position"].shape[0:3])
-        target_density = self.densitydict["density"][pos_index]
-        probe_pos = self.densitydict["grid_position"][pos_index]
-        _, _, probe_edges, probe_edges_features = atoms_and_probes_to_graph(self.densitydict["atoms"], probe_pos, self.cutoff)
+        return self.static_get_slice(slice_index, self.densitydict, self.probe_count, self.cutoff, self.ignore_pbc)
+
+    @staticmethod
+    def static_get_slice(slice_index, densitydict, probe_count, cutoff, ignore_pbc):
+        num_positions = np.prod(densitydict["grid_position"].shape[0:3])
+        flat_index = np.arange(slice_index*probe_count, min((slice_index+1)*probe_count, num_positions))
+        pos_index = np.unravel_index(flat_index, densitydict["grid_position"].shape[0:3])
+        target_density = densitydict["density"][pos_index]
+        probe_pos = densitydict["grid_position"][pos_index]
+        if ignore_pbc:
+            atoms = densitydict["atoms"].copy()
+            atoms.set_pbc(False)
+        else:
+            atoms = densitydict["atoms"]
+        _, _, probe_edges, probe_edges_features = atoms_and_probes_to_graph(atoms, probe_pos, cutoff)
 
         if not probe_edges:
             probe_edges = [np.zeros((0,2), dtype=np.int)]
@@ -192,16 +218,32 @@ class DensityGridIterator:
 
         return res
 
+
     def __iter__(self):
         self.current_slice = 0
+        slice_id_queue = multiprocessing.Queue()
+        self.result_queue = multiprocessing.Queue(100)
+        self.finished_slices = dict()
+        for i in range(self.num_slices):
+            slice_id_queue.put(i)
+        self.workers = [multiprocessing.Process(target=grid_iterator_worker, args=(self.densitydict, self.probe_count, self.cutoff, self.ignore_pbc, slice_id_queue, self.result_queue)) for _ in range(6)]
+        for w in self.workers:
+            w.start()
         return self
 
     def __next__(self):
         if self.current_slice < self.num_slices:
             this_slice = self.current_slice
             self.current_slice += 1
-            return self.get_slice(this_slice)
+
+            # Retrieve finished slices until we get the one we are looking for
+            while this_slice not in self.finished_slices:
+                i, res = self.result_queue.get()
+                self.finished_slices[i] = res
+            return self.finished_slices.pop(this_slice)
         else:
+            for w in self.workers:
+                w.terminate()
             raise StopIteration
 
 
