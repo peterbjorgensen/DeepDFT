@@ -164,11 +164,10 @@ class AseNeigborListWrapper:
 def grid_iterator_worker(densitydict, probe_count, cutoff, ignore_pbc, slice_id_queue, result_queue):
     while True:
         try:
-            slice_id = slice_id_queue.get()
+            slice_id = slice_id_queue.get_nowait()
         except queue.Empty:
             while not result_queue.empty():
                 time.sleep(1)
-            print("grid worker quitting")
             result_queue.close()
             return 0
         res = DensityGridIterator.static_get_slice(slice_id, densitydict, probe_count, cutoff, ignore_pbc)
@@ -243,7 +242,7 @@ class DensityGridIterator:
             return self.finished_slices.pop(this_slice)
         else:
             for w in self.workers:
-                w.terminate()
+                w.join()
             raise StopIteration
 
 
