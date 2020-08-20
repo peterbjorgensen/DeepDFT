@@ -202,18 +202,25 @@ class DensityGridIterator:
 
         if not probe_edges:
             probe_edges = [np.zeros((0,2), dtype=np.int)]
-            probe_edges_features = [np.zeros((0,), dtype=np.int)]
+            probe_edges_features = [np.zeros((0,), dtype=np.float32)]
 
-        # pylint: disable=E1102
-        default_type = torch.get_default_dtype()
         res = {
-            "probe_edges": torch.tensor(np.concatenate(probe_edges, axis=0)),
-            "probe_edges_features": torch.tensor(
-                np.concatenate(probe_edges_features, axis=0)[:, None], dtype=default_type
-            ),
+            "probe_edges": np.concatenate(probe_edges, axis=0),
+            "probe_edges_features": np.concatenate(probe_edges_features, axis=0).astype(np.float32)[:, None],
         }
-        res["num_probe_edges"] = torch.tensor(res["probe_edges"].shape[0])
-        res["num_probes"] = torch.tensor(len(flat_index))
+        res["num_probe_edges"] = res["probe_edges"].shape[0]
+        res["num_probes"] = len(flat_index)
+
+        ## # pylint: disable=E1102
+        ## default_type = torch.get_default_dtype()
+        ## res = {
+        ##     "probe_edges": torch.tensor(np.concatenate(probe_edges, axis=0)),
+        ##     "probe_edges_features": torch.tensor(
+        ##         np.concatenate(probe_edges_features, axis=0)[:, None], dtype=default_type
+        ##     ),
+        ## }
+        ## res["num_probe_edges"] = torch.tensor(res["probe_edges"].shape[0])
+        ## res["num_probes"] = torch.tensor(len(flat_index))
 
         return res
 
@@ -238,6 +245,7 @@ class DensityGridIterator:
             # Retrieve finished slices until we get the one we are looking for
             while this_slice not in self.finished_slices:
                 i, res = self.result_queue.get()
+                res = {k: torch.tensor(v) for k,v in res.items()} # convert to torch tensor
                 self.finished_slices[i] = res
             return self.finished_slices.pop(this_slice)
         else:
