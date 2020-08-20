@@ -191,7 +191,6 @@ class DensityGridIterator:
         num_positions = np.prod(densitydict["grid_position"].shape[0:3])
         flat_index = np.arange(slice_index*probe_count, min((slice_index+1)*probe_count, num_positions))
         pos_index = np.unravel_index(flat_index, densitydict["grid_position"].shape[0:3])
-        target_density = densitydict["density"][pos_index]
         probe_pos = densitydict["grid_position"][pos_index]
         if ignore_pbc:
             atoms = densitydict["atoms"].copy()
@@ -210,17 +209,6 @@ class DensityGridIterator:
         }
         res["num_probe_edges"] = res["probe_edges"].shape[0]
         res["num_probes"] = len(flat_index)
-
-        ## # pylint: disable=E1102
-        ## default_type = torch.get_default_dtype()
-        ## res = {
-        ##     "probe_edges": torch.tensor(np.concatenate(probe_edges, axis=0)),
-        ##     "probe_edges_features": torch.tensor(
-        ##         np.concatenate(probe_edges_features, axis=0)[:, None], dtype=default_type
-        ##     ),
-        ## }
-        ## res["num_probe_edges"] = torch.tensor(res["probe_edges"].shape[0])
-        ## res["num_probes"] = torch.tensor(len(flat_index))
 
         return res
 
