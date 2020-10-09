@@ -118,8 +118,8 @@ def main():
             pin_memory=True,
             disable_pbc=args.ignore_pbc,
         )
-        logging.debug("Computing atom representation")
         graph_dict = collate_fn([density_dict])
+        logging.debug("Computing atom representation")
         device_batch = {
             k: v.to(device=device, non_blocking=True) for k, v in graph_dict.items()
         }
