@@ -112,16 +112,19 @@ def main():
 
     with torch.no_grad():
         # Make graph with no probes
+        logging.debug("Computing atom-to-atom graph")
         collate_fn = dataset.CollateFuncAtoms(
             cutoff=cutoff,
             pin_memory=True,
             disable_pbc=args.ignore_pbc,
         )
+        logging.debug("Computing atom representation")
         graph_dict = collate_fn([density_dict])
         device_batch = {
             k: v.to(device=device, non_blocking=True) for k, v in graph_dict.items()
         }
         atom_representation = model.atom_model(device_batch)
+        logging.debug("Atom representation done")
 
         # Loop over all slices
         density_iter = dataset.DensityGridIterator(density_dict, args.ignore_pbc, 1000, cutoff)
