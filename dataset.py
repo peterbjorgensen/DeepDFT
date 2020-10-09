@@ -285,8 +285,6 @@ def atoms_and_probes_to_graph(atoms, probe_pos, cutoff):
     return atom_edges, atom_edges_features, probe_edges, probe_edges_features
 
 def atoms_and_probe_sample_to_graph(density, atoms, grid_pos, cutoff, num_probes):
-    nodes = atoms.get_atomic_numbers()
-
     # Sample probes on the calculated grid
     probe_choice_max = np.prod(grid_pos.shape[0:3])
     probe_choice = np.random.randint(probe_choice_max, size=num_probes)
@@ -303,7 +301,7 @@ def atoms_and_probe_sample_to_graph(density, atoms, grid_pos, cutoff, num_probes
         probe_edges_features = [np.zeros((0,), dtype=np.int)]
     # pylint: disable=E1102
     res = {
-        "nodes": torch.tensor(nodes),
+        "nodes": torch.tensor(atoms.get_atomic_numbers()),
         "atom_edges": torch.tensor(np.concatenate(atom_edges, axis=0)),
         "atom_edges_features": torch.tensor(
             np.concatenate(atom_edges_features, axis=0)[:, None], dtype=default_type
@@ -318,6 +316,25 @@ def atoms_and_probe_sample_to_graph(density, atoms, grid_pos, cutoff, num_probes
     res["num_atom_edges"] = torch.tensor(res["atom_edges"].shape[0])
     res["num_probe_edges"] = torch.tensor(res["probe_edges"].shape[0])
     res["num_probes"] = torch.tensor(res["probe_target"].shape[0])
+
+    return res
+
+def atoms_to_graph(atoms, cutoff):
+    probe_pos = np.zeros((0,3))
+    atom_edges, atom_edges_features, _, _ = atoms_and_probes_to_graph(atoms, probe_pos, cutoff)
+
+    default_type = torch.get_default_dtype()
+
+    # pylint: disable=E1102
+    res = {
+        "nodes": torch.tensor(atoms.get_atomic_numbers()),
+        "atom_edges": torch.tensor(np.concatenate(atom_edges, axis=0)),
+        "atom_edges_features": torch.tensor(
+            np.concatenate(atom_edges_features, axis=0)[:, None], dtype=default_type
+        ),
+    }
+    res["num_nodes"] = torch.tensor(res["nodes"].shape[0])
+    res["num_atom_edges"] = torch.tensor(res["atom_edges"].shape[0])
 
     return res
 
@@ -356,6 +373,28 @@ class CollateFuncRandomSample:
                 i["grid_position"],
                 self.cutoff,
                 self.num_probes,
+            ))
+
+        return collate_list_of_dicts(graphs, pin_memory=self.pin_memory)
+
+class CollateFuncAtoms:
+    def __init__(self, cutoff, pin_memory=True, disable_pbc=False):
+        self.cutoff = cutoff
+        self.pin_memory = pin_memory
+        self.disable_pbc = disable_pbc
+
+    def __call__(self, input_dicts: List):
+        graphs = []
+        for i in input_dicts:
+            if self.disable_pbc:
+                atoms = i["atoms"].copy()
+                atoms.set_pbc(False)
+            else:
+                atoms = i["atoms"]
+
+            graphs.append(atoms_to_graph(
+                atoms,
+                self.cutoff,
             ))
 
         return collate_list_of_dicts(graphs, pin_memory=self.pin_memory)
