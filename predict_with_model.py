@@ -115,7 +115,7 @@ def main():
     cubewriter = utils.CubeWriter(
         os.path.join(args.output_dir, "prediction.cube"),
         density_dict["atoms"],
-        density_dict["grid_position"].shape,
+        density_dict["grid_position"].shape[0:3],
         density_dict["origin"],
         "predicted by DeepDFT model",
     )
@@ -150,7 +150,7 @@ def main():
             device_batch["num_probes"] = probe_dict["num_probes"]
 
             cubewriter.write(model.probe_model(device_batch, atom_representation).cpu().detach().numpy().flatten())
-            logging.debug("Written %d/%d", cubewriter.numbers_written, np.prod(density_dict["grid_position"].shape))
+            logging.debug("Written %d/%d", cubewriter.numbers_written, np.prod(density_dict["grid_position"].shape[0:3]))
 
 if __name__ == "__main__":
     main()
