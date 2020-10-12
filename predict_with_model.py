@@ -46,19 +46,29 @@ def load_model(model_dir, device):
     return model, runner_args.cutoff
 
 class LazyMeshGrid():
-    def __init__(self, cell, grid_step):
+    def __init__(self, cell, grid_step, origin=None):
         self.cell = cell
-        self.shape = np.floor(self.cell.lengths()/grid_step).astype(int)
-        self.scaled_grid_vectors = [np.linspace(0, 1, a) for a in self.shape]
-        #self.grid_vectors = [np.arange(a)*grid_step for a in self.shape]
+        self.scaled_grid_vectors = [np.arange(0, l, grid_step)/l for l in self.cell.lengths()]
+        self.shape = np.array([len(g) for g in self.scaled_grid_vectors] + [3])
+        if origin is None:
+            self.origin = np.zeros(3)
+        else:
+            self.origin = origin
+
+        self.origin = np.expand_dims(self.origin, 0)
 
     def __getitem__(self, indices):
+        indices = np.array(indices)
+        indices_shape = indices.shape
+        if not (len(indices_shape) == 2 and indices_shape[0] == 3):
+            raise NotImplementedError("Indexing must be a 3xN array-like object")
         gridA = self.scaled_grid_vectors[0][indices[0]]
         gridB = self.scaled_grid_vectors[1][indices[1]]
         gridC = self.scaled_grid_vectors[2][indices[2]]
 
         grid_pos = np.stack([gridA, gridB, gridC], 1)
         grid_pos = np.dot(grid_pos, self.cell)
+        grid_pos += self.origin
 
         return grid_pos
 
