@@ -5,6 +5,7 @@ import logging
 import os
 import json
 import argparse
+import math
 
 import numpy as np
 
@@ -73,9 +74,20 @@ class LazyMeshGrid():
         return grid_pos
 
 
-def load_atoms(atomspath, vacuum, grid_step):
+def ceil_float(x, step_size):
+    # Round up to nearest step_size and subtract a small epsilon
+    x = math.ceil(x/step_size) * step_size
+    eps = 2*np.finfo(float).eps * x
+    return x - eps
+
+def load_molecule(atomspath, vacuum, grid_step):
     atoms = ase.io.read(atomspath)
-    atoms.center(vacuum=vacuum)
+    atoms.center(vacuum=vacuum) # This will create a cell around the atoms
+
+    # Readjust cell lengths to be a multiple of grid_step
+    a, b, c, ang_bc, ang_ac, ang_ab = atoms.get_cell_lengths_and_angles()
+    a, b, c = ceil_float(a, grid_step), ceil_float(b, grid_step), ceil_float(c, grid_step)
+    atoms.set_cell([a, b, c, ang_bc, ang_ac, ang_ab])
 
     origin = np.zeros(3)
 
@@ -108,7 +120,7 @@ def main():
 
     model, cutoff = load_model(args.model_dir, args.device)
 
-    density_dict = load_atoms(args.atoms_file, args.vacuum, args.grid_step)
+    density_dict = load_molecule(args.atoms_file, args.vacuum, args.grid_step)
 
     device = torch.device(args.device)
 
