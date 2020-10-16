@@ -170,7 +170,7 @@ def grid_iterator_worker(atoms, meshgrid, probe_count, cutoff, slice_id_queue, r
         neighborlist = None
     while True:
         try:
-            slice_id = slice_id_queue.get_nowait()
+            slice_id = slice_id_queue.get(True, 10)
         except queue.Empty:
             while not result_queue.empty():
                 time.sleep(1)
