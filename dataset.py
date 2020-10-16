@@ -373,7 +373,7 @@ def probes_to_graph(atoms, probe_pos, cutoff, neighborlist=None):
     probe_edges = []
     probe_edges_features = []
     if hasattr(neighborlist, "get_neighbors_querypoint"):
-        results = neighborlist.get_neighbors_querypoint(atoms.get_cell().scaled_positions(probe_pos))
+        results = neighborlist.get_neighbors_querypoint(probe_pos)
         atomic_numbers = atoms.get_atomic_numbers()
     else:
         # Insert probe atoms
