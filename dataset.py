@@ -1,4 +1,5 @@
 from typing import List
+import warnings
 import tarfile
 import multiprocessing
 import queue
@@ -161,7 +162,12 @@ class AseNeigborListWrapper:
         return indices, rel_positions, dist2
 
 
-def grid_iterator_worker(densitydict, probe_count, cutoff, ignore_pbc, slice_id_queue, result_queue):
+def grid_iterator_worker(atoms, meshgrid, probe_count, cutoff, slice_id_queue, result_queue):
+    try:
+        neighborlist = asap3.FullNeighborList(cutoff, atoms)
+    except Exception as e:
+        warnings.warn("Failed to create asap3 neighborlist, this might get slow. Error: %s", e)
+        neighborlist = None
     while True:
         try:
             slice_id = slice_id_queue.get_nowait()
@@ -170,34 +176,35 @@ def grid_iterator_worker(densitydict, probe_count, cutoff, ignore_pbc, slice_id_
                 time.sleep(1)
             result_queue.close()
             return 0
-        res = DensityGridIterator.static_get_slice(slice_id, densitydict, probe_count, cutoff, ignore_pbc)
+        res = DensityGridIterator.static_get_slice(slice_id, atoms, meshgrid, probe_count, cutoff, neighborlist=neighborlist)
         result_queue.put((slice_id, res))
 
 class DensityGridIterator:
     def __init__(self, densitydict, ignore_pbc: bool, probe_count: int, cutoff: float):
-        self.densitydict = densitydict
-
         num_positions = np.prod(densitydict["grid_position"].shape[0:3])
         self.num_slices = int(math.ceil(num_positions / probe_count))
         self.probe_count = probe_count
         self.cutoff = cutoff
         self.ignore_pbc = ignore_pbc
 
+        if ignore_pbc:
+            self.atoms = densitydict["atoms"].copy()
+            self.atoms.set_pbc(False)
+        else:
+            self.atoms = densitydict["atoms"]
+
+        self.meshgrid = densitydict["grid_position"]
+
     def get_slice(self, slice_index):
-        return self.static_get_slice(slice_index, self.densitydict, self.probe_count, self.cutoff, self.ignore_pbc)
+        return self.static_get_slice(slice_index, self.atoms, self.meshgrid, self.probe_count, self.cutoff)
 
     @staticmethod
-    def static_get_slice(slice_index, densitydict, probe_count, cutoff, ignore_pbc):
-        num_positions = np.prod(densitydict["grid_position"].shape[0:3])
+    def static_get_slice(slice_index, atoms, meshgrid, probe_count, cutoff, neighborlist=None):
+        num_positions = np.prod(meshgrid.shape[0:3])
         flat_index = np.arange(slice_index*probe_count, min((slice_index+1)*probe_count, num_positions))
-        pos_index = np.unravel_index(flat_index, densitydict["grid_position"].shape[0:3])
-        probe_pos = densitydict["grid_position"][pos_index]
-        if ignore_pbc:
-            atoms = densitydict["atoms"].copy()
-            atoms.set_pbc(False)
-        else:
-            atoms = densitydict["atoms"]
-        _, _, probe_edges, probe_edges_features = atoms_and_probes_to_graph(atoms, probe_pos, cutoff)
+        pos_index = np.unravel_index(flat_index, meshgrid.shape[0:3])
+        probe_pos = meshgrid[pos_index]
+        probe_edges, probe_edges_features = probes_to_graph(atoms, probe_pos, cutoff, neighborlist)
 
         if not probe_edges:
             probe_edges = [np.zeros((0,2), dtype=np.int)]
@@ -220,7 +227,7 @@ class DensityGridIterator:
         self.finished_slices = dict()
         for i in range(self.num_slices):
             slice_id_queue.put(i)
-        self.workers = [multiprocessing.Process(target=grid_iterator_worker, args=(self.densitydict, self.probe_count, self.cutoff, self.ignore_pbc, slice_id_queue, self.result_queue)) for _ in range(6)]
+        self.workers = [multiprocessing.Process(target=grid_iterator_worker, args=(self.atoms, self.meshgrid, self.probe_count, self.cutoff, slice_id_queue, self.result_queue)) for _ in range(6)]
         for w in self.workers:
             w.start()
         return self
@@ -242,49 +249,49 @@ class DensityGridIterator:
             raise StopIteration
 
 
-def atoms_and_probes_to_graph(atoms, probe_pos, cutoff):
-    # Insert probe atoms
-    num_probes = probe_pos.shape[0]
-    probe_atoms = ase.Atoms(numbers=[0] * num_probes, positions=probe_pos)
-    atoms_with_probes = atoms.copy()
-    atoms_with_probes.extend(probe_atoms)
+### def atoms_and_probes_to_graph(atoms, probe_pos, cutoff):
+###     # Insert probe atoms
+###     num_probes = probe_pos.shape[0]
+###     probe_atoms = ase.Atoms(numbers=[0] * num_probes, positions=probe_pos)
+###     atoms_with_probes = atoms.copy()
+###     atoms_with_probes.extend(probe_atoms)
+### 
+###     atom_edges = []
+###     atom_edges_features = []
+###     probe_edges = []
+###     probe_edges_features = []
+### 
+###     # Compute neighborlist
+###     if np.any(atoms.get_cell().lengths() <= 0.0001) or (np.any(atoms.get_pbc()) and np.any(atoms.get_cell().lengths() < cutoff)):
+###         neighborlist = AseNeigborListWrapper(cutoff, atoms_with_probes)
+###     else:
+###         neighborlist = asap3.FullNeighborList(cutoff, atoms_with_probes)
+###     atomic_numbers = atoms_with_probes.get_atomic_numbers()
+###     for i in range(len(atoms_with_probes)):
+###         neigh_idx, _, neigh_dist2 = neighborlist.get_neighbors(i, cutoff)
+###         neigh_dist = np.sqrt(neigh_dist2)
+###         neigh_atomic_species = atomic_numbers[neigh_idx]
+### 
+###         neigh_is_atom = neigh_atomic_species != 0
+###         neigh_atoms = neigh_idx[neigh_is_atom]
+### 
+###         self_index = np.ones_like(neigh_atoms) * i
+###         if i < len(atoms):
+###             self_index = np.ones_like(neigh_atoms) * i
+###         else:
+###             self_index = np.ones_like(neigh_atoms) * (i - len(atoms))
+###         edges = np.stack((neigh_atoms, self_index), axis=1)
+### 
+###         if i < len(atoms):  # We are computing edges for an atom
+###             atom_edges.append(edges)
+###             atom_edges_features.append(neigh_dist[neigh_is_atom])
+###         else:  # We are computing edgs for a probe
+###             probe_edges.append(edges)
+###             probe_edges_features.append(neigh_dist[neigh_is_atom])
+### 
+###     return atom_edges, atom_edges_features, probe_edges, probe_edges_features
 
-    atom_edges = []
-    atom_edges_features = []
-    probe_edges = []
-    probe_edges_features = []
-
-    # Compute neighborlist
-    if np.any(atoms.get_cell().lengths() <= 0.0001) or (np.any(atoms.get_pbc()) and np.any(atoms.get_cell().lengths() < cutoff)):
-       neighborlist = AseNeigborListWrapper(cutoff, atoms_with_probes)
-    else:
-        neighborlist = asap3.FullNeighborList(cutoff, atoms_with_probes)
-    atomic_numbers = atoms_with_probes.get_atomic_numbers()
-    for i in range(len(atoms_with_probes)):
-        neigh_idx, _, neigh_dist2 = neighborlist.get_neighbors(i, cutoff)
-        neigh_dist = np.sqrt(neigh_dist2)
-        neigh_atomic_species = atomic_numbers[neigh_idx]
-
-        neigh_is_atom = neigh_atomic_species != 0
-        neigh_atoms = neigh_idx[neigh_is_atom]
-
-        self_index = np.ones_like(neigh_atoms) * i
-        if i < len(atoms):
-            self_index = np.ones_like(neigh_atoms) * i
-        else:
-            self_index = np.ones_like(neigh_atoms) * (i - len(atoms))
-        edges = np.stack((neigh_atoms, self_index), axis=1)
-
-        if i < len(atoms):  # We are computing edges for an atom
-            atom_edges.append(edges)
-            atom_edges_features.append(neigh_dist[neigh_is_atom])
-        else:  # We are computing edgs for a probe
-            probe_edges.append(edges)
-            probe_edges_features.append(neigh_dist[neigh_is_atom])
-
-    return atom_edges, atom_edges_features, probe_edges, probe_edges_features
-
-def atoms_and_probe_sample_to_graph(density, atoms, grid_pos, cutoff, num_probes):
+def atoms_and_probe_sample_to_graph_dict(density, atoms, grid_pos, cutoff, num_probes):
     # Sample probes on the calculated grid
     probe_choice_max = np.prod(grid_pos.shape[0:3])
     probe_choice = np.random.randint(probe_choice_max, size=num_probes)
@@ -292,7 +299,8 @@ def atoms_and_probe_sample_to_graph(density, atoms, grid_pos, cutoff, num_probes
     probe_pos = grid_pos[probe_choice]
     probe_target = density[probe_choice]
 
-    atom_edges, atom_edges_features, probe_edges, probe_edges_features = atoms_and_probes_to_graph(atoms, probe_pos, cutoff)
+    atom_edges, atom_edges_features, neighborlist = atoms_to_graph(atoms, cutoff)
+    probe_edges, probe_edges_features = probes_to_graph(atoms, probe_pos, cutoff, neighborlist=neighborlist)
 
     default_type = torch.get_default_dtype()
 
@@ -319,9 +327,9 @@ def atoms_and_probe_sample_to_graph(density, atoms, grid_pos, cutoff, num_probes
 
     return res
 
-def atoms_to_graph(atoms, cutoff):
+def atoms_to_graph_dict(atoms, cutoff):
     probe_pos = np.zeros((0,3))
-    atom_edges, atom_edges_features, _, _ = atoms_and_probes_to_graph(atoms, probe_pos, cutoff)
+    atom_edges, atom_edges_features, _ = atoms_to_graph(atoms, cutoff)
 
     default_type = torch.get_default_dtype()
 
@@ -337,6 +345,66 @@ def atoms_to_graph(atoms, cutoff):
     res["num_atom_edges"] = torch.tensor(res["atom_edges"].shape[0])
 
     return res
+
+def atoms_to_graph(atoms, cutoff):
+    atom_edges = []
+    atom_edges_features = []
+
+    # Compute neighborlist
+    if np.any(atoms.get_cell().lengths() <= 0.0001) or (np.any(atoms.get_pbc()) and np.any(atoms.get_cell().lengths() < cutoff)):
+        neighborlist = AseNeigborListWrapper(cutoff, atoms)
+    else:
+        neighborlist = asap3.FullNeighborList(cutoff, atoms)
+    atomic_numbers = atoms.get_atomic_numbers()
+    for i in range(len(atoms)):
+        neigh_idx, _, neigh_dist2 = neighborlist.get_neighbors(i, cutoff)
+        neigh_dist = np.sqrt(neigh_dist2)
+        neigh_atomic_species = atomic_numbers[neigh_idx]
+
+        self_index = np.ones_like(neigh_idx) * i
+        edges = np.stack((neigh_idx, self_index), axis=1)
+
+        atom_edges.append(edges)
+        atom_edges_features.append(neigh_dist)
+
+    return atom_edges, atom_edges_features, neighborlist
+
+def probes_to_graph(atoms, probe_pos, cutoff, neighborlist=None):
+    probe_edges = []
+    probe_edges_features = []
+    if hasattr(neighborlist, "get_neighbors_querypoint"):
+        results = neighborlist.get_neighbors_querypoint(atoms.get_cell().scaled_positions(probe_pos))
+        atomic_numbers = atoms.get_atomic_numbers()
+    else:
+        # Insert probe atoms
+        num_probes = probe_pos.shape[0]
+        probe_atoms = ase.Atoms(numbers=[0] * num_probes, positions=probe_pos)
+        atoms_with_probes = atoms.copy()
+        atoms_with_probes.extend(probe_atoms)
+        atomic_numbers = atoms_with_probes.get_atomic_numbers()
+
+        probe_edges = []
+        probe_edges_features = []
+
+        if np.any(atoms.get_cell().lengths() <= 0.0001) or (np.any(atoms.get_pbc()) and np.any(atoms.get_cell().lengths() < cutoff)):
+            neighborlist = AseNeigborListWrapper(cutoff, atoms_with_probes)
+        else:
+            neighborlist = asap3.FullNeighborList(cutoff, atoms_with_probes)
+
+        results = [neighborlist.get_neighbors(i+len(atoms), cutoff) for i in range(num_probes)]
+
+    for i, (neigh_idx, neigh_diff, neigh_dist2) in enumerate(results):
+        neigh_dist = np.sqrt(neigh_dist2)
+        neigh_atomic_species = atomic_numbers[neigh_idx]
+
+        neigh_is_atom = neigh_atomic_species != 0
+        neigh_atoms = neigh_idx[neigh_is_atom]
+        self_index = np.ones_like(neigh_atoms) * i
+        edges = np.stack((neigh_atoms, self_index), axis=1)
+        probe_edges.append(edges)
+        probe_edges_features.append(neigh_dist[neigh_is_atom])
+
+    return probe_edges, probe_edges_features
 
 def collate_list_of_dicts(list_of_dicts, pin_memory=False):
     # Convert from "list of dicts" to "dict of lists"
@@ -367,7 +435,7 @@ class CollateFuncRandomSample:
             else:
                 atoms = i["atoms"]
 
-            graphs.append(atoms_and_probe_sample_to_graph(
+            graphs.append(atoms_and_probe_sample_to_graph_dict(
                 i["density"],
                 atoms,
                 i["grid_position"],
@@ -392,7 +460,7 @@ class CollateFuncAtoms:
             else:
                 atoms = i["atoms"]
 
-            graphs.append(atoms_to_graph(
+            graphs.append(atoms_to_graph_dict(
                 atoms,
                 self.cutoff,
             ))
