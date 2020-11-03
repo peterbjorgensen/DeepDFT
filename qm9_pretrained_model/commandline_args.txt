@@ -1,0 +1,13 @@
+--dataset
+/nobackup/pbjo/qm9vasp/qm9vasp.txt
+--split_file
+/nobackup/pbjo/qm9vasp/index_splits.json
+--ignore_pbc
+--cutoff
+4
+--num_interactions
+6
+--max_steps
+100000000
+--node_size
+128
