@@ -1,6 +1,7 @@
 from typing import List
 import warnings
 import tarfile
+import tempfile
 import multiprocessing
 import queue
 import time
@@ -105,12 +106,11 @@ class DensityData(torch.utils.data.Dataset):
 
     def extract_member(self, tarinfo):
         with tarfile.open(self.tarpath, "r") as tar:
-            if tarinfo.name.endswith(".cube"):
-                density, atoms, origin = _extract_cube(tar, tarinfo)
-            elif tarinfo.name.endswith(".cube.zz"):
-                density, atoms, origin = _extract_compressed_cube(tar, tarinfo)
+            filecontent = _decompress(tar, tarinfo)
+            if tarinfo.name.endswith((".cube", ".cube.zz", "cube.lz4")):
+                density, atoms, origin = _read_cube(filecontent)
             else:
-                density, atoms, origin = _extract_vasp(tar, tarinfo)
+                density, atoms, origin = _read_vasp(filecontent)
 
         grid_pos = _calculate_grid_pos(density, origin, atoms.get_cell())
 
@@ -483,20 +483,25 @@ def _calculate_grid_pos(density, origin, cell):
     return grid_pos
 
 
-def _extract_vasp(tar, tarinfo):
-    # Extract compressed file
-    buf = tar.extractfile(tarinfo)
-    if tarinfo.name.endswith(".zz"):
-        filecontent = zlib.decompress(buf.read())
-    elif tarinfo.name.endswith(".lz4"):
-        filecontent = lz4.frame.decompress(buf.read())
-    else:
-        filecontent = buf.read()
+def _decompress(tar, tarinfo):
+    """Extract compressed tar file member and return a bytes object with the content"""
 
+    bytesobj = tar.extractfile(tarinfo).read()
+    if tarinfo.name.endswith(".zz"):
+        filecontent = zlib.decompress(bytesobj)
+    elif tarinfo.name.endswith(".lz4"):
+        filecontent = lz4.frame.decompress(bytesobj)
+    else:
+        filecontent = bytesobj
+
+    return filecontent
+
+def _read_vasp(filecontent):
     # Write to tmp file and read using ASE
-    tmppath = "/tmp/extracted%d" % os.getpid()
-    with open(tmppath, "wb") as tmpfile:
-        tmpfile.write(filecontent)
+    tmpfd, tmppath = tempfile.mkstemp(prefix="tmpdeepdft")
+    tmpfile = os.fdopen(tmpfd, "wb")
+    tmpfile.write(filecontent)
+    tmpfile.close()
     vasp_charge = VaspChargeDensity(filename=tmppath)
     os.remove(tmppath)
     density = vasp_charge.chg[-1]  # separate density
@@ -505,22 +510,9 @@ def _extract_vasp(tar, tarinfo):
     return density, atoms, np.zeros(3)  # TODO: Can we always assume origin at 0,0,0?
 
 
-def _extract_cube(tar, tarinfo):
-    textbuf = io.TextIOWrapper(tar.extractfile(tarinfo))
+def _read_cube(filecontent):
+    textbuf = io.StringIO(filecontent.decode())
     cube = ase.io.cube.read_cube(textbuf)
-    # sometimes there is an entry at index 3
-    # denoting the number of values for each grid position
-    origin = cube["origin"][0:3]
-    # by convention the cube electron density is given in electrons/Bohr^3,
-    # and ase read_cube does not convert to electrons/Å^3, so we do the conversion here
-    cube["data"] *= 1.0 / ase.units.Bohr ** 3
-    return cube["data"], cube["atoms"], origin
-
-
-def _extract_compressed_cube(tar, tarinfo):
-    buf = tar.extractfile(tarinfo)
-    cube_file = io.StringIO(zlib.decompress(buf.read()).decode())
-    cube = ase.io.cube.read_cube(cube_file)
     # sometimes there is an entry at index 3
     # denoting the number of values for each grid position
     origin = cube["origin"][0:3]
