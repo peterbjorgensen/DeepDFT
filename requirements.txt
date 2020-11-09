@@ -1,3 +1,4 @@
 ase
 torch
 asap3
+numpy
