@@ -42,7 +42,7 @@ def load_model(model_dir, device):
     model = densitymodel.DensityModel(runner_args.num_interactions, runner_args.node_size, runner_args.cutoff)
     device = torch.device(device)
     model.to(device)
-    state_dict = torch.load(os.path.join(model_dir, "best_model.pth"))
+    state_dict = torch.load(os.path.join(model_dir, "best_model.pth"), map_location=device)
     model.load_state_dict(state_dict["model"])
     return model, runner_args.cutoff
 
@@ -137,7 +137,7 @@ def main():
         logging.debug("Computing atom-to-atom graph")
         collate_fn = dataset.CollateFuncAtoms(
             cutoff=cutoff,
-            pin_memory=True,
+            pin_memory=device.type == "cuda",
             disable_pbc=args.ignore_pbc,
         )
         graph_dict = collate_fn([density_dict])
