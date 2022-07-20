@@ -1,0 +1,14 @@
+--dataset
+/home/niflheim2/pbjo/ethylenecarbonate/ethylenecarbonate.txt
+--split_file
+/home/niflheim2/pbjo/ethylenecarbonate/splits.json
+--cutoff
+4
+--num_interactions
+6
+--max_steps
+10000000
+--node_size
+128
+--output_dir
+/home/energy/pbjo/densitynet_runs/2021-06-18T12:40:34.676146

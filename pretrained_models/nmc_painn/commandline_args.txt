@@ -1,0 +1,15 @@
+--dataset
+/home/niflheim2/pbjo/nmc/cellrelax.txt
+--split_file
+/home/niflheim2/pbjo/nmc/split.json
+--cutoff
+4
+--num_interactions
+3
+--max_steps
+10000000
+--node_size
+128
+--use_painn_model
+--output_dir
+/home/energy/pbjo/densitynet_runs/2021-10-14T16:36:12.212212

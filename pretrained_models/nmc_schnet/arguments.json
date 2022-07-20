@@ -1,0 +1,1 @@
+{"load_model": null, "cutoff": 4.0, "split_file": "/home/niflheim2/pbjo/nmc/split.json", "num_interactions": 6, "node_size": 128, "output_dir": "/home/energy/pbjo/densitynet_runs/2021-10-14T16:39:56.374898", "dataset": "/home/niflheim2/pbjo/nmc/cellrelax.txt", "max_steps": 10000000, "device": "cuda", "use_painn_model": false, "ignore_pbc": false}

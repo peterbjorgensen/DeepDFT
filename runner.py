@@ -9,6 +9,8 @@ import timeit
 
 import numpy as np
 import torch
+import torch.utils.data
+torch.set_num_threads(1) # Try to avoid thread overload on cluster
 
 import densitymodel
 import dataset
@@ -65,6 +67,12 @@ def get_arguments(arg_list=None):
         type=str,
         default="cuda",
         help="Set which device to use for training e.g. 'cuda' or 'cpu'",
+    )
+
+    parser.add_argument(
+        "--use_painn_model",
+        action="store_true",
+        help="Enable equivariant message passing model (PaiNN)"
     )
 
     parser.add_argument(
@@ -167,6 +175,9 @@ def get_normalization(dataset, per_atom=True):
     return x_mean, torch.sqrt(x_var)
 
 
+def count_parameters(model):
+    return sum(p.numel() for p in model.parameters() if p.requires_grad)
+
 def main():
     args = get_arguments()
 
@@ -224,7 +235,11 @@ def main():
 
     # Initialise model
     device = torch.device(args.device)
-    net = densitymodel.DensityModel(args.num_interactions, args.node_size, args.cutoff,)
+    if args.use_painn_model:
+        net = densitymodel.PainnDensityModel(args.num_interactions, args.node_size, args.cutoff,)
+    else:
+        net = densitymodel.DensityModel(args.num_interactions, args.node_size, args.cutoff,)
+    logging.debug("model has %d parameters", count_parameters(net))
     net = net.to(device)
 
     # Setup optimizer
@@ -233,7 +248,7 @@ def main():
     scheduler_fn = lambda step: 0.96 ** (step / 100000)
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, scheduler_fn)
 
-    log_interval = 1000
+    log_interval = 5000
     running_loss = torch.tensor(0.0, device=device)
     running_loss_count = torch.tensor(0, device=device)
     best_val_mae = np.inf
@@ -255,7 +270,7 @@ def main():
     eval_timer = AverageMeter("eval_time")
 
     endtime = timeit.default_timer()
-    for epoch in itertools.count():
+    for _ in itertools.count():
         for batch_host in train_loader:
             data_timer.update(timeit.default_timer()-endtime)
             tstart = timeit.default_timer()

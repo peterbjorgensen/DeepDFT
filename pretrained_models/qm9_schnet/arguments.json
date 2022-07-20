@@ -1,0 +1,1 @@
+{"load_model": null, "cutoff": 4.0, "split_file": "/nobackup/pbjo/qm9vasp/index_splits.json", "num_interactions": 6, "node_size": 128, "output_dir": "runs/model_output", "dataset": "/nobackup/pbjo/qm9vasp/qm9vasp.txt", "max_steps": 100000000, "device": "cuda", "ignore_pbc": true, "use_painn_model": false}

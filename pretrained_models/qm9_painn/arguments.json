@@ -1,0 +1,1 @@
+{"load_model": null, "cutoff": 4.0, "split_file": "/home/niflheim2/pbjo/qm9vasp/datasplits.json", "num_interactions": 3, "node_size": 128, "output_dir": "/home/energy/pbjo/densitynet_runs/2021-05-18T17:52:04.873627", "dataset": "/home/niflheim2/pbjo/qm9vasp/qm9vasp.txt", "max_steps": 10000000, "device": "cuda", "use_painn_model": true, "ignore_pbc": false}
