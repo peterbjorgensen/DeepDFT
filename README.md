@@ -28,6 +28,7 @@ Example used for training the model on QM9:
 	$ python runner.py --dataset datadir/qm9vasp.txt --split_file datadir/splits.json --ignore_pbc --cutoff 4 --num_interactions 6 --max_steps 100000000 --node_size 128
 
 Or to train the equivariant model on the ethylene carbonate dataset:
+
 	$ python runner.py --dataset datadir/ethylenecarbonate.txt --split_file datadir/splits.json --cutoff 4 --num_interactions 3 --use_painn_model --max_steps 100000000 --node_size 128
 
 The json file contains two keys "train", and "validation" each with a list of indices for the train and validation sets. If the argument is omitted the data will be randomly split.
