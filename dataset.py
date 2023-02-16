@@ -349,7 +349,7 @@ def atoms_and_probe_sample_to_graph_dict(density, atoms, grid_pos, cutoff, num_p
     res["num_probes"] = torch.tensor(res["probe_target"].shape[0])
     res["probe_xyz"] = torch.tensor(probe_pos, dtype=default_type)
     res["atom_xyz"] = torch.tensor(atoms.get_positions(), dtype=default_type)
-    res["cell"] = torch.tensor(atoms.get_cell(), dtype=default_type)
+    res["cell"] = torch.tensor(np.array(atoms.get_cell()), dtype=default_type)
 
     return res
 
