@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Optional
 import gzip
 import tarfile
 import tempfile
@@ -244,16 +244,16 @@ def grid_iterator_worker(atoms, meshgrid, probe_count, cutoff, slice_id_queue, r
         result_queue.put((slice_id, res))
 
 class DensityGridIterator:
-    def __init__(self, densitydict, ignore_pbc: bool, probe_count: int, cutoff: float):
+    def __init__(self, densitydict, probe_count: int, cutoff: float, set_pbc_to: Optional[bool] = None):
         num_positions = np.prod(densitydict["grid_position"].shape[0:3])
         self.num_slices = int(math.ceil(num_positions / probe_count))
         self.probe_count = probe_count
         self.cutoff = cutoff
-        self.ignore_pbc = ignore_pbc
+        self.set_pbc = set_pbc_to
 
-        if ignore_pbc:
+        if self.set_pbc is not None:
             self.atoms = densitydict["atoms"].copy()
-            self.atoms.set_pbc(False)
+            self.atoms.set_pbc(self.set_pbc)
         else:
             self.atoms = densitydict["atoms"]
 
@@ -472,18 +472,18 @@ def collate_list_of_dicts(list_of_dicts, pin_memory=False):
     return collated
 
 class CollateFuncRandomSample:
-    def __init__(self, cutoff, num_probes, pin_memory=True, disable_pbc=False):
+    def __init__(self, cutoff, num_probes, pin_memory=True, set_pbc_to=None):
         self.num_probes = num_probes
         self.cutoff = cutoff
         self.pin_memory = pin_memory
-        self.disable_pbc = disable_pbc
+        self.set_pbc = set_pbc_to
 
     def __call__(self, input_dicts: List):
         graphs = []
         for i in input_dicts:
-            if self.disable_pbc:
+            if self.set_pbc is not None:
                 atoms = i["atoms"].copy()
-                atoms.set_pbc(False)
+                atoms.set_pbc(self.set_pbc)
             else:
                 atoms = i["atoms"]
 
@@ -498,17 +498,17 @@ class CollateFuncRandomSample:
         return collate_list_of_dicts(graphs, pin_memory=self.pin_memory)
 
 class CollateFuncAtoms:
-    def __init__(self, cutoff, pin_memory=True, disable_pbc=False):
+    def __init__(self, cutoff, pin_memory=True, set_pbc_to=None):
         self.cutoff = cutoff
         self.pin_memory = pin_memory
-        self.disable_pbc = disable_pbc
+        self.set_pbc = set_pbc_to
 
     def __call__(self, input_dicts: List):
         graphs = []
         for i in input_dicts:
-            if self.disable_pbc:
+            if self.set_pbc is not None:
                 atoms = i["atoms"].copy()
-                atoms.set_pbc(False)
+                atoms.set_pbc(self.set_pbc)
             else:
                 atoms = i["atoms"]
 

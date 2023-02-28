@@ -37,7 +37,12 @@ def get_arguments(arg_list=None):
     parser.add_argument(
         "--ignore_pbc",
         action="store_true",
-        help="If flag is given, ignore periodic boundary conditions in atoms data",
+        help="If flag is given, disable periodic boundary conditions (force to False) in atoms data",
+    )
+    parser.add_argument(
+        "--force_pbc",
+        action="store_true",
+        help="If flag is given, force periodic boundary conditions to True in atoms data",
     )
 
     return parser.parse_args(arg_list)
@@ -191,6 +196,15 @@ def main():
                 )
             )
 
+    if args.ignore_pbc and args.force_pbc:
+        raise ValueError("ignore_pbc and force_pbc are mutually exclusive and can't both be set at the same time")
+    elif args.ignore_pbc:
+        set_pbc = False
+    elif args.force_pbc:
+        set_pbc = True
+    else:
+        set_pbc = None
+
     start_time = timeit.default_timer()
 
     if args.iri or args.dori or args.hessian_eig:
@@ -204,7 +218,7 @@ def main():
         collate_fn = dataset.CollateFuncAtoms(
             cutoff=cutoff,
             pin_memory=device.type == "cuda",
-            disable_pbc=args.ignore_pbc,
+            set_pbc_to=set_pbc,
         )
         graph_dict = collate_fn([density_dict])
         logging.debug("Computing atom representation")
@@ -218,7 +232,7 @@ def main():
         logging.debug("Atom representation done")
 
         # Loop over all slices
-        density_iter = dataset.DensityGridIterator(density_dict, args.ignore_pbc, args.probe_count, cutoff)
+        density_iter = dataset.DensityGridIterator(density_dict, args.probe_count, cutoff, set_pbc_to=set_pbc)
         density = []
         for probe_graph_dict in density_iter:
             probe_dict = dataset.collate_list_of_dicts([probe_graph_dict])

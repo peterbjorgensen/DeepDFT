@@ -78,7 +78,13 @@ def get_arguments(arg_list=None):
     parser.add_argument(
         "--ignore_pbc",
         action="store_true",
-        help="If flag is given, ignore periodic boundary conditions in atoms data",
+        help="If flag is given, disable periodic boundary conditions (force to False) in atoms data",
+    )
+
+    parser.add_argument(
+        "--force_pbc",
+        action="store_true",
+        help="If flag is given, force periodic boundary conditions to True in atoms data",
     )
 
     return parser.parse_args(arg_list)
@@ -216,18 +222,27 @@ def main():
     datasplits = split_data(densitydata, args)
     datasplits["train"] = dataset.RotatingPoolData(datasplits["train"], 20)
 
+    if args.ignore_pbc and args.force_pbc:
+        raise ValueError("ignore_pbc and force_pbc are mutually exclusive and can't both be set at the same time")
+    elif args.ignore_pbc:
+        set_pbc = False
+    elif args.force_pbc:
+        set_pbc = True
+    else:
+        set_pbc = None
+
     # Setup loaders
     train_loader = torch.utils.data.DataLoader(
         datasplits["train"],
         2,
         num_workers=4,
         sampler=torch.utils.data.RandomSampler(datasplits["train"]),
-        collate_fn=dataset.CollateFuncRandomSample(args.cutoff, 1000, pin_memory=False, disable_pbc=args.ignore_pbc),
+        collate_fn=dataset.CollateFuncRandomSample(args.cutoff, 1000, pin_memory=False, set_pbc_to=set_pbc),
     )
     val_loader = torch.utils.data.DataLoader(
         datasplits["validation"],
         2,
-        collate_fn=dataset.CollateFuncRandomSample(args.cutoff, 5000, pin_memory=False, disable_pbc=args.ignore_pbc),
+        collate_fn=dataset.CollateFuncRandomSample(args.cutoff, 5000, pin_memory=False, set_pbc_to=set_pbc),
         num_workers=0,
     )
     logging.info("Preloading validation batch")
